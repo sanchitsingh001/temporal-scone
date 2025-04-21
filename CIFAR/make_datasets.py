@@ -35,7 +35,7 @@ cifar10_path = '../data/'
 cifar100_path = '../data/'
 svhn_path = '../data/'
 lsun_c_path = '../data/LSUN/'
-lsun_r_path = '../data/LSUN/'
+lsun_r_path = '../data/'
 isun_path = '../data/'
 dtd_path = '../data/'
 places_path = '../data/'
@@ -435,6 +435,41 @@ def train_valid_split(test_in_data, test_in_data_cor, aux_in_data, aux_in_data_c
 
     return test_in_data, test_in_data_cor, valid_in_data_final, valid_aux_data_final, train_aux_in_data_final, train_aux_in_data_cor_final, train_aux_out_data_final
 
+###Making temporal datasets
+def make_temporal_datasets(in_dset, wild_dset, T, batch_size, seed=1, num_workers=4):
+    rng = np.random.default_rng(seed)
+
+    print(f"Creating temporal dataset with {T} time steps...")
+
+    # Load CIFAR as ID and FashionMNIST (or any) as wild OOD
+    id_data, _ = load_CIFAR(in_dset)
+    wild_data, _ = load_FashionMNIST() if wild_dset == 'FashionMNIST' else load_SVHN()
+
+    # Shuffle and split
+    id_idx = rng.permutation(len(id_data))
+    wild_idx = rng.permutation(len(wild_data))
+
+    id_splits = np.array_split(id_idx, T)
+    wild_splits = np.array_split(wild_idx, T)
+
+    # Subsets
+    D_in = [torch.utils.data.Subset(id_data, s) for s in id_splits]
+    D_wild = [torch.utils.data.Subset(wild_data, s) for s in wild_splits]
+
+    # Dataloaders per time step
+    D_in_loaders = [
+        torch.utils.data.DataLoader(d, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
+        for d in D_in
+    ]
+    D_wild_loaders = [
+        torch.utils.data.DataLoader(d, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
+        for d in D_wild
+    ]
+
+    return {
+    "D_in": D_in_loaders,       # D_in[0], D_in[1], ..., D_in[T-1]
+    "D_wild": D_wild_loaders    # D_wild[0], D_wild[1], ..., D_wild[T-1]
+}
 
 def make_datasets(in_dset, aux_out_dset, test_out_dset, state, alpha, pi_1, pi_2, cortype):
 
@@ -520,6 +555,9 @@ def make_datasets(in_dset, aux_out_dset, test_out_dset, state, alpha, pi_1, pi_2
     return train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, train_loader_aux_out, test_loader_in, test_loader_cor, test_loader_out, valid_loader_in, valid_loader_aux
 
 
+
+
+
 def make_test_dataset(in_data, test_out_dset, state):
 
     mean = [x / 255 for x in [125.3, 123.0, 113.9]]
@@ -585,3 +623,14 @@ def make_test_dataset(in_data, test_out_dset, state):
         num_workers=state['prefetch'], pin_memory=True)
 
     return test_loader, test_loader_ood
+
+#### For consistency, adding a helper so it’s easier to call make_temporal_datasets from a training script using state dictionary
+def make_temporal_dataset_loader(in_dset, wild_dset, T, state):
+    return make_temporal_datasets(
+        in_dset=in_dset,
+        wild_dset=wild_dset,
+        T=T,
+        batch_size=state['batch_size'],
+        seed=state['seed'],
+        num_workers=state['prefetch']
+    )
