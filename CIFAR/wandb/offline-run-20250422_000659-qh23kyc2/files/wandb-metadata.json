@@ -1,0 +1,67 @@
+{
+  "os": "Linux-5.15.0-124-generic-x86_64-with-glibc2.35",
+  "python": "CPython 3.11.9",
+  "startedAt": "2025-04-22T00:06:59.314857Z",
+  "args": [
+    "cifar10",
+    "--model",
+    "wrn",
+    "--score",
+    "scone",
+    "--learning_rate",
+    "0.0001",
+    "--epochs",
+    "100",
+    "--test_out_dataset",
+    "lsun_c",
+    "--aux_out_dataset",
+    "lsun_c",
+    "--batch_size=128",
+    "--ngpu=1",
+    "--prefetch=4",
+    "--results_dir=results",
+    "--checkpoints_dir=",
+    "--load_pretrained=snapshots/pretrained",
+    "--pi_1=0.5",
+    "--pi_2=0.1",
+    "--eta=-10.0",
+    "--alpha=0.5",
+    "--cortype=gaussian_noise"
+  ],
+  "program": "/home/jovyan/scone-temporal/scone/CIFAR/train.py",
+  "codePath": "CIFAR/train.py",
+  "git": {
+    "remote": "https://github.com/sanchitsingh001/temporal-scone.git",
+    "commit": "15c67cc274c6fac758bd0b5ee14b42550cd30b08"
+  },
+  "root": "/home/jovyan/scone-temporal/scone/CIFAR",
+  "host": "jupyter-ssingh1949-sdsu-edu---1e14e4ee",
+  "executable": "/opt/conda/bin/python",
+  "codePathLocal": "train.py",
+  "cpu_count": 24,
+  "cpu_count_logical": 24,
+  "gpu": "NVIDIA L40",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "858574028800",
+      "used": "528271306752"
+    }
+  },
+  "memory": {
+    "total": "540532285440"
+  },
+  "cpu": {
+    "count": 24,
+    "countLogical": 24
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA L40",
+      "memoryTotal": "48305799168",
+      "cudaCores": 18176,
+      "architecture": "Ada"
+    }
+  ],
+  "cudaVersion": "12.4"
+}

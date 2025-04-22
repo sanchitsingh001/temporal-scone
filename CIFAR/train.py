@@ -377,29 +377,38 @@ if args.score in ['woods_nn', 'woods', 'scone']:
 
 
 def mix_batches(aux_in_set, aux_in_cor_set, aux_out_set):
-    '''
-    Args:
-        aux_in_set: minibatch from in_distribution
-        aux_in_cor_set: minibatch from covariate shift OOD distribution
-        aux_out_set: minibatch from semantic shift OOD distribution
+    in_data, _ = aux_in_set
+    cor_data, _ = aux_in_cor_set
+    out_data, _ = aux_out_set
 
-    Returns:
-        mixture of minibatches with mixture proportion pi_1 of aux_in_cor_set and pi_2 of aux_out_set
-    '''
-    
-    # create a mask to decide which sample is in the batch
-    mask_1 = rng.choice(a=[False, True], size=(args.batch_size,), p=[1 - args.pi_1, args.pi_1])
-    aux_in_cor_set_subsampled = aux_in_cor_set[0][mask_1]
+    # Use actual batch size from current in_data
+    batch_size = in_data.shape[0]
 
-    mask_2 = rng.choice(a=[False, True], size=(args.batch_size,), p=[1 - args.pi_2, args.pi_2])
-    aux_out_set_subsampled = aux_out_set[0][mask_2]
+    # Safe probabilities
+    pi_1 = args.pi_1
+    pi_2 = args.pi_2
+    pi_clean = 1.0 - pi_1 - pi_2
 
-    mask_12 = rng.choice(a=[False, True], size=(args.batch_size,), p=[1 - (args.pi_1 + args.pi_2), (args.pi_1 + args.pi_2)])
-    #mask = rng.choice(a=[False, True], size=(args.batch_size,), p=[1 - 0.05, 0.05])
-    aux_in_set_subsampled = aux_in_set[0][np.invert(mask_12)]
+    # Calculate number of samples from each type
+    n_clean = int(batch_size * pi_clean)
+    n_cor = int(batch_size * pi_1)
+    n_out = int(batch_size * pi_2)
 
-    # note: ordering of aux_out_set_subsampled, aux_in_set_subsampled does not matter because you always take the sum
-    aux_set = torch.cat((aux_out_set_subsampled, aux_in_set_subsampled, aux_in_cor_set_subsampled), 0)
+    # Clamp to available data size
+    n_clean = min(n_clean, in_data.shape[0])
+    n_cor = min(n_cor, cor_data.shape[0])
+    n_out = min(n_out, out_data.shape[0])
+
+    # Subsample using random indices
+    idx_clean = np.random.choice(in_data.shape[0], n_clean, replace=False)
+    idx_cor = np.random.choice(cor_data.shape[0], n_cor, replace=False)
+    idx_out = np.random.choice(out_data.shape[0], n_out, replace=False)
+
+    aux_in_clean_sub = in_data[idx_clean]
+    aux_in_cor_sub = cor_data[idx_cor]
+    aux_out_sub = out_data[idx_out]
+
+    aux_set = torch.cat([aux_in_clean_sub, aux_in_cor_sub, aux_out_sub], dim=0)
 
     return aux_set
 
@@ -455,10 +464,11 @@ def fpr_and_fdr_at_recall(y_true, y_score, recall_level, pos_label=1.):
 
 
 
-def train(epoch):
+def train(epoch,city_loader_in, city_loader_aux_in, city_loader_aux_cor, city_loader_aux_out,city_index):
     '''
     Train the model using the specified score
     '''
+    print(f"\nTraining on City {city_index}")
 
     # make the variables global for optimization purposes
     global in_constraint_weight
@@ -479,26 +489,37 @@ def train(epoch):
     train_accuracies = []
 
     # # start at a random point of the dataset for; this induces more randomness without obliterating locality
-    train_loader_aux_in.dataset.offset = rng.integers(
-        len(train_loader_aux_in.dataset))
+    # train_loader_aux_in.dataset.offset = rng.integers(
+    #     len(train_loader_aux_in.dataset))
 
-    train_loader_aux_in_cor.dataset.offset = rng.integers(
-        len(train_loader_aux_in_cor.dataset))   
+    # train_loader_aux_in_cor.dataset.offset = rng.integers(
+    #     len(train_loader_aux_in_cor.dataset))   
 
-    train_loader_aux_out.dataset.offset = rng.integers(
-        len(train_loader_aux_out.dataset))
+    # train_loader_aux_out.dataset.offset = rng.integers(
+    #     len(train_loader_aux_out.dataset))
     batch_num = 1
     #loaders = zip(train_loader_in, train_loader_aux_in, train_loader_aux_out)
-    loaders = zip(train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, train_loader_aux_out)
+    
+        
+    
+    
+    city_loader = zip(
+    city_loader_in,
+    city_loader_aux_in,
+    city_loader_aux_cor,
+    city_loader_aux_out
+)
 
-    # for logging in weights & biases
-    losses_ce = []
-    in_losses = []
-    out_losses = []
-    out_losses_weighted = []
-    losses = []
+    for in_set, aux_in_set, aux_in_cor_set, aux_out_set in city_loader:
 
-    for in_set, aux_in_set, aux_in_cor_set, aux_out_set in loaders:    
+        # for logging in weights & biases
+        losses_ce = []
+        in_losses = []
+        out_losses = []
+        out_losses_weighted = []
+        losses = []
+    
+           
         #create the mixed batch
         aux_set = mix_batches(aux_in_set, aux_in_cor_set, aux_out_set)
 
@@ -636,6 +657,7 @@ def train(epoch):
 
     wandb.log({
         'epoch':epoch,
+        'city': city_index,
         "learning rate": optimizer.param_groups[0]['lr'],
         'CE loss':loss_ce_avg,
         'in loss':in_loss_avg,
@@ -653,7 +675,7 @@ def train(epoch):
         print("making updates for SSND alm methods...")
 
         # compute terms for constraints
-        in_term, ce_loss = compute_constraint_terms()
+        in_term, ce_loss = compute_constraint_terms(city_loader_in)
 
         # update lam for in-distribution term
         if args.score in ["woods_nn"]:
@@ -705,7 +727,7 @@ def train(epoch):
     #alm update for energy_vos alm methods
     if args.score in ['scone', 'woods']:
         print("making updates for energy alm methods...")
-        avg_sigmoid_energy_losses, _, avg_ce_loss = evaluate_energy_logistic_loss()
+        avg_sigmoid_energy_losses, _, avg_ce_loss = evaluate_energy_logistic_loss(city_loader_in)
 
         in_term_constraint = avg_sigmoid_energy_losses -  args.false_alarm_cutoff
         print("in_distribution constraint value {}".format(in_term_constraint))
@@ -755,7 +777,7 @@ def train(epoch):
             ce_constraint_weight *= args.penalty_mult
 
 
-def compute_constraint_terms():
+def compute_constraint_terms(city_loader_in):
     '''
 
     Compute the in-distribution term and the cross-entropy loss over the whole training set
@@ -767,7 +789,7 @@ def compute_constraint_terms():
     in_terms = []
     ce_losses = []
     num_batches = 0
-    for in_set in train_loader_in:
+    for in_set in city_loader_in:
         num_batches += 1
         data = in_set[0]
         target = in_set[1]
@@ -1048,14 +1070,14 @@ def test(epoch):
     print("val_wild_class_as_in {} \n".format(state['val_wild_class_as_in']))
 
 
-def evaluate_classification_loss_training():
+def evaluate_classification_loss_training(city_loader_in):
     '''
     evaluate classification loss on training dataset
     '''
 
     net.eval()
     losses = []
-    for in_set in train_loader_in:
+    for in_set in city_loader_in:
         data = in_set[0]
         target = in_set[1]
 
@@ -1076,7 +1098,7 @@ def evaluate_classification_loss_training():
     return avg_loss
 
 
-def evaluate_energy_logistic_loss():
+def evaluate_energy_logistic_loss(city_loader_in):
     '''
     evaluate energy logistic loss on training dataset
     '''
@@ -1085,7 +1107,7 @@ def evaluate_energy_logistic_loss():
     sigmoid_energy_losses = []
     logistic_energy_losses = []
     ce_losses = []
-    for in_set in train_loader_in:
+    for in_set in city_loader_in:
         data = in_set[0]
         target = in_set[1]
 
@@ -1133,26 +1155,77 @@ def evaluate_energy_logistic_loss():
 print('Beginning Training\n')
 
 #compute training loss for scone/woods methods
-if args.score in [ 'woods_nn', 'woods', 'scone']:
-    full_train_loss = evaluate_classification_loss_training()
 
 ###################################################################
 # Main loop
 ###################################################################
 
+from torch.utils.data import Subset, DataLoader
+import numpy as np
+
+def split_loader_into_cities(dataloader, T=3, seed=42):
+    rng = np.random.default_rng(seed)
+    dataset = dataloader.dataset
+    indices = np.arange(len(dataset))
+    rng.shuffle(indices)
+    city_splits = np.array_split(indices, T)
+    return [
+        DataLoader(
+            Subset(dataset, split),
+            batch_size=dataloader.batch_size,
+            shuffle=True,  # or False depending on use
+            num_workers=dataloader.num_workers,
+            pin_memory=True,
+            drop_last=False
+        )
+        for split in city_splits
+    ]
+
+loaders = make_datasets(in_dset='cifar10', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
+
+train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, \
+train_loader_aux_out, test_loader_in, test_loader_cor, \
+test_loader_out, valid_loader_in, valid_loader_aux = loaders
+
+
+T = 3  # number of city splits
+
+train_loader_in_cities       = split_loader_into_cities(train_loader_in, T)
+train_loader_aux_in_cities   = split_loader_into_cities(train_loader_aux_in, T)
+train_loader_aux_cor_cities  = split_loader_into_cities(train_loader_aux_in_cor, T)
+train_loader_aux_out_cities  = split_loader_into_cities(train_loader_aux_out, T)
+
+
 import time
+T = 3  # number of cities
+total_epochs_per_city = args.epochs
 
-for epoch in range(0, args.epochs):
-    print('epoch', epoch + 1, '/', args.epochs)
-    state['epoch'] = epoch
+for t in range(T):
+    print(f"\n=======================\nTraining on City {t}\n=======================")
 
-    begin_epoch = time.time()
+    city_loader_in = train_loader_in_cities[t]
+    city_loader_aux_in = train_loader_aux_in_cities[t]
+    city_loader_aux_cor = train_loader_aux_cor_cities[t]
+    city_loader_aux_out = train_loader_aux_out_cities[t]
 
-    train(epoch)
+    if args.score in [ 'woods_nn', 'woods', 'scone']:
+        full_train_loss = evaluate_classification_loss_training(city_loader_in)
 
-    test(epoch)
+    
+    for epoch in range(total_epochs_per_city):
+        global_epoch = t * total_epochs_per_city + epoch
+        print('epoch', global_epoch + 1, '/', total_epochs_per_city * T)
+        state['epoch'] = global_epoch
 
-    scheduler.step()
+        train(global_epoch,
+              city_loader_in,
+              city_loader_aux_in,
+              city_loader_aux_cor,
+              city_loader_aux_out, t)
+
+        test(global_epoch)
+        scheduler.step()
+        
 
 state['best_epoch_valid'] = epoch
 

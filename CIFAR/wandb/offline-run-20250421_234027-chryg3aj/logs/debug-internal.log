@@ -1,0 +1,8 @@
+{"time":"2025-04-21T23:40:27.063657557Z","level":"INFO","msg":"stream: starting","core version":"0.19.9","symlink path":"/home/jovyan/scone-temporal/scone/CIFAR/wandb/offline-run-20250421_234027-chryg3aj/logs/debug-core.log"}
+{"time":"2025-04-21T23:40:27.169560455Z","level":"WARN","msg":"GraphQL client is nil, skipping feature loading"}
+{"time":"2025-04-21T23:40:27.169652102Z","level":"INFO","msg":"created new stream","id":"chryg3aj"}
+{"time":"2025-04-21T23:40:27.169671286Z","level":"INFO","msg":"stream: started","id":"chryg3aj"}
+{"time":"2025-04-21T23:40:27.169682691Z","level":"INFO","msg":"writer: Do: started","stream_id":"chryg3aj"}
+{"time":"2025-04-21T23:40:27.169690526Z","level":"INFO","msg":"sender: started","stream_id":"chryg3aj"}
+{"time":"2025-04-21T23:40:27.169732546Z","level":"INFO","msg":"handler: started","stream_id":"chryg3aj"}
+{"time":"2025-04-21T23:40:27.172819638Z","level":"INFO","msg":"Starting system monitor"}

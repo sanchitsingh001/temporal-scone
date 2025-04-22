@@ -1,0 +1,15 @@
+{"time":"2025-04-21T23:45:29.183480656Z","level":"INFO","msg":"stream: starting","core version":"0.19.9","symlink path":"/home/jovyan/scone-temporal/scone/CIFAR/wandb/offline-run-20250421_234529-cqiwxoen/logs/debug-core.log"}
+{"time":"2025-04-21T23:45:29.288979659Z","level":"WARN","msg":"GraphQL client is nil, skipping feature loading"}
+{"time":"2025-04-21T23:45:29.289081993Z","level":"INFO","msg":"created new stream","id":"cqiwxoen"}
+{"time":"2025-04-21T23:45:29.289102422Z","level":"INFO","msg":"stream: started","id":"cqiwxoen"}
+{"time":"2025-04-21T23:45:29.289118373Z","level":"INFO","msg":"writer: Do: started","stream_id":"cqiwxoen"}
+{"time":"2025-04-21T23:45:29.289144039Z","level":"INFO","msg":"handler: started","stream_id":"cqiwxoen"}
+{"time":"2025-04-21T23:45:29.289120979Z","level":"INFO","msg":"sender: started","stream_id":"cqiwxoen"}
+{"time":"2025-04-21T23:45:29.292596025Z","level":"INFO","msg":"Starting system monitor"}
+{"time":"2025-04-21T23:45:35.299467386Z","level":"INFO","msg":"stream: closing","id":"cqiwxoen"}
+{"time":"2025-04-21T23:45:35.299486962Z","level":"INFO","msg":"Stopping system monitor"}
+{"time":"2025-04-21T23:45:35.299539236Z","level":"INFO","msg":"Stopped system monitor"}
+{"time":"2025-04-21T23:45:35.299612655Z","level":"INFO","msg":"handler: closed","stream_id":"cqiwxoen"}
+{"time":"2025-04-21T23:45:35.299618466Z","level":"INFO","msg":"writer: Close: closed","stream_id":"cqiwxoen"}
+{"time":"2025-04-21T23:45:35.299652163Z","level":"INFO","msg":"sender: closed","stream_id":"cqiwxoen"}
+{"time":"2025-04-21T23:45:35.299682255Z","level":"INFO","msg":"stream: closed","id":"cqiwxoen"}

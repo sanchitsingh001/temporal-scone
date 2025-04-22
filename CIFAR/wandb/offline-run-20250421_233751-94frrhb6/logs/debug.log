@@ -1,0 +1,23 @@
+2025-04-21 23:37:51,699 INFO    MainThread:58359 [wandb_setup.py:_flush():67] Current SDK version is 0.19.9
+2025-04-21 23:37:51,699 INFO    MainThread:58359 [wandb_setup.py:_flush():67] Configure stats pid to 58359
+2025-04-21 23:37:51,699 INFO    MainThread:58359 [wandb_setup.py:_flush():67] Loading settings from /home/jovyan/.config/wandb/settings
+2025-04-21 23:37:51,699 INFO    MainThread:58359 [wandb_setup.py:_flush():67] Loading settings from /home/jovyan/scone-temporal/scone/CIFAR/wandb/settings
+2025-04-21 23:37:51,699 INFO    MainThread:58359 [wandb_setup.py:_flush():67] Loading settings from environment variables
+2025-04-21 23:37:51,699 INFO    MainThread:58359 [wandb_init.py:setup_run_log_directory():662] Logging user logs to /home/jovyan/scone-temporal/scone/CIFAR/wandb/offline-run-20250421_233751-94frrhb6/logs/debug.log
+2025-04-21 23:37:51,700 INFO    MainThread:58359 [wandb_init.py:setup_run_log_directory():663] Logging internal logs to /home/jovyan/scone-temporal/scone/CIFAR/wandb/offline-run-20250421_233751-94frrhb6/logs/debug-internal.log
+2025-04-21 23:37:51,700 INFO    MainThread:58359 [wandb_init.py:init():781] calling init triggers
+2025-04-21 23:37:51,700 INFO    MainThread:58359 [wandb_init.py:init():786] wandb.init called with sweep_config: {}
+config: {'dataset': 'cifar10', 'model': 'wrn', 'epochs': 100, 'learning_rate': 0.0001, 'batch_size': 128, 'oe_batch_size': 256, 'test_bs': 200, 'momentum': 0.9, 'decay': 0.0005, 'layers': 40, 'widen_factor': 2, 'droprate': 0.3, 'results_dir': 'results', 'checkpoints_dir': '', 'load_pretrained': 'snapshots/pretrained', 'test': False, 'ngpu': 1, 'gpu_id': 1, 'prefetch': 4, 'score': 'scone', 'seed': 1, 'classification': True, 'aux_out_dataset': 'lsun_c', 'test_out_dataset': 'lsun_c', 'pi_1': 0.5, 'pi_2': 0.1, 'pseudo': 0.01, 'start_epoch': 50, 'cortype': 'gaussian_noise', 'in_constraint_weight': 1, 'out_constraint_weight': 1, 'ce_constraint_weight': 1, 'false_alarm_cutoff': 0.05, 'lr_lam': 1, 'ce_tol': 2, 'penalty_mult': 1.5, 'constraint_tol': 0, 'eta': -10.0, 'alpha': 0.5, 'm_in': -25.0, 'm_out': -5.0, 'T': 1.0, 'energy_vos_lambda': 2, 'oe_lambda': 0.5, '_wandb': {}}
+2025-04-21 23:37:51,700 INFO    MainThread:58359 [wandb_init.py:init():809] starting backend
+2025-04-21 23:37:51,700 INFO    MainThread:58359 [wandb_init.py:init():813] sending inform_init request
+2025-04-21 23:37:51,703 INFO    MainThread:58359 [backend.py:_multiprocessing_setup():101] multiprocessing start_methods=fork,spawn,forkserver, using: spawn
+2025-04-21 23:37:51,703 INFO    MainThread:58359 [wandb_init.py:init():823] backend started and connected
+2025-04-21 23:37:51,704 INFO    MainThread:58359 [wandb_init.py:init():915] updated telemetry
+2025-04-21 23:37:51,707 INFO    MainThread:58359 [wandb_init.py:init():939] communicating run to backend with 90.0 second timeout
+2025-04-21 23:37:51,814 INFO    MainThread:58359 [wandb_init.py:init():1014] starting run threads in backend
+2025-04-21 23:37:51,917 INFO    MainThread:58359 [wandb_run.py:_console_start():2454] atexit reg
+2025-04-21 23:37:51,918 INFO    MainThread:58359 [wandb_run.py:_redirect():2306] redirect: wrap_raw
+2025-04-21 23:37:51,918 INFO    MainThread:58359 [wandb_run.py:_redirect():2371] Wrapping output streams.
+2025-04-21 23:37:51,918 INFO    MainThread:58359 [wandb_run.py:_redirect():2394] Redirects installed.
+2025-04-21 23:37:51,919 INFO    MainThread:58359 [wandb_init.py:init():1056] run started, returning control to user process
+2025-04-21 23:37:59,835 INFO    MsgRouterThr:58359 [mailbox.py:close():129] [no run ID] Closing mailbox, abandoning 0 handles.
