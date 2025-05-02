@@ -87,6 +87,19 @@ def load_CIFAR(dataset, classes=[]):
 
     return train_data, test_data
 
+def load_any_data(dataset_root):
+    mean = [x / 255 for x in [125.3, 123.0, 113.9]]
+    std = [x / 255 for x in [63.0, 62.1, 66.7]]
+
+    train_transform = trn.Compose([trn.Resize(32), trn.CenterCrop(32),trn.ToTensor(), trn.Normalize(mean, std)])
+    test_transform = trn.Compose([trn.Resize(32), trn.CenterCrop(32),trn.ToTensor(), trn.Normalize(mean, std)])
+    
+
+    train_data = dset.ImageFolder(root=f"{dataset_root}/train", transform=train_transform)
+    test_data = dset.ImageFolder(root=f"{dataset_root}/test", transform=test_transform)
+
+    return train_data, test_data
+    
 
 def load_MNIST():
 
@@ -141,7 +154,27 @@ def load_CorCifar(dataset, cortype):
 
     return train_data, test_data
 
+def load_any_cor(dataset, cortype):
+    print(f"loading {dataset}")
+    from dataloader.cor_any_Loader import CorAnyDataset as Dataset
 
+    train_path = ""
+    test_path = ""
+    
+    if 'flower' in dataset.lower():
+        train_path = '../data/CorFlower/CorFlowers10_train/'
+        test_path = '../data/CorFlower/CorFlowers10_test'
+    elif 'cub' in dataset.lower():
+        train_path = '../data/CorCUB/CorCUB10_train/'
+        test_path = '../data/CorCUB/CorCUB10_train/'
+
+    else:
+        print("Use a valid dataset")
+
+    print(f"Using trainpath: {train_path}\n testpath: {test_path}")
+    train_data = Dataset('train', cortype, train_path)
+    test_data = Dataset('test', cortype, test_path)
+    return train_data, test_data
 
 def load_SVHN(include_extra=False):
 
@@ -200,6 +233,21 @@ def load_dataset(dataset):
     return out_data
 
 
+def load_any_in_data(in_dset, rng):
+    train_data_in_orig, test_in_data = load_any_data(in_dset)
+    idx = np.array(range(len(train_data_in_orig)))
+    rng.shuffle(idx)
+    train_len = int(0.5 * len(train_data_in_orig))
+    train_idx = idx[:train_len]
+    aux_idx = idx[train_len:]
+
+    train_in_data = torch.utils.data.Subset(train_data_in_orig, train_idx)
+    aux_in_data = torch.utils.data.Subset(train_data_in_orig, aux_idx)
+
+    return train_in_data, aux_in_data, test_in_data
+
+    
+
 def load_in_data(in_dset, rng):
 
     train_data_in_orig, test_in_data = load_CIFAR(in_dset)
@@ -254,6 +302,35 @@ def load_in_mixMNIST_data(in_dset, rng, alpha):
     aux_in_data = aux_in_data_mnist
 
     return train_in_data, aux_in_data, aux_in_data_cor, test_in_data_mnist, test_in_data_cor
+
+def load_in_mixAny_data(in_dset, rng, alpha, cortype):
+    train_data_in_orig_any, test_in_data_any = load_any_data(in_dset)
+    aux_data_cor_orig, test_data_cor = load_any_cor(in_dset, cortype)
+
+    idx = np.array(range(len(train_data_in_orig_any)))
+    rng.shuffle(idx)
+
+    train_len = int(alpha * len(train_data_in_orig_any))
+    train_idx = idx[:train_len]
+    
+    aux_idx = idx[int(0.5*len(train_data_in_orig_any)):]
+
+    train_in_data = torch.utils.data.Subset(train_data_in_orig_any, train_idx)
+
+    aux_in_data = torch.utils.data.Subset(train_data_in_orig_any, aux_idx)
+
+    idx_cor = np.array(range(len(aux_data_cor_orig)))
+    rng.shuffle(idx)
+    train_len_cor = int(alpha * len(aux_data_cor_orig))
+    train_idx_cor = idx_cor[:train_len_cor]
+    aux_idx_cor = idx[int(0.5*len(aux_data_cor_orig)):]
+
+    train_in_cor_data = torch.utils.data.Subset(aux_data_cor_orig, train_idx_cor)
+    aux_in_cor_data = torch.utils.data.Subset(aux_data_cor_orig, aux_idx_cor)
+
+
+    return train_in_data, aux_in_data, aux_data_cor_orig, test_in_data_any, test_data_cor
+    
 
 
 def load_in_mixCifar_data(in_dset, rng, alpha, cortype):
@@ -470,6 +547,83 @@ def make_temporal_datasets(in_dset, wild_dset, T, batch_size, seed=1, num_worker
     "D_in": D_in_loaders,       # D_in[0], D_in[1], ..., D_in[T-1]
     "D_wild": D_wild_loaders    # D_wild[0], D_wild[1], ..., D_wild[T-1]
 }
+
+def make_any_Dataset(in_dset, aux_out_dset, test_out_dset, state, alpha, pi_1, pi_2, cortype):
+    rng = np.random.default_rng(state['seed'])
+    print('building datasets...')
+    train_in_data, aux_in_data, aux_in_data_cor, test_in_data, test_in_data_cor = load_in_mixAny_data(in_dset, rng, alpha, cortype)
+
+    aux_out_data, test_out_data = load_out_data(aux_out_dset, test_out_dset, in_dset, rng)
+
+    test_in_data, test_in_data_cor, valid_in_data_final, valid_aux_data_final, train_aux_in_data_final, train_aux_in_data_cor_final, train_aux_out_data_final = train_valid_split(test_in_data, test_in_data_cor, aux_in_data, aux_in_data_cor, aux_out_data, rng, pi_1, pi_2)
+
+
+    # create the dataloaders
+    train_loader_in = torch.utils.data.DataLoader(
+        train_in_data,
+        batch_size=state['batch_size'], shuffle=True,
+        num_workers=state['prefetch'], pin_memory=True)
+
+    # validation for P_0
+    valid_loader_in = torch.utils.data.DataLoader(
+        valid_in_data_final,
+        batch_size=state['batch_size'], shuffle=False,
+        num_workers=state['prefetch'], pin_memory=True)
+
+    # auxiliary dataset
+
+    #for in-distribution component of mixture
+    #drop last batch to eliminate unequal batch size issues
+    train_loader_aux_in = torch.utils.data.DataLoader(
+        #train_aux_in_data_mix_final,
+        train_aux_in_data_final,
+        batch_size=state['batch_size'], shuffle=True,
+        num_workers=state['prefetch'], pin_memory=True, drop_last=True)
+
+
+    #for in-distribution cor component of mixture
+    #drop last batch to eliminate unequal batch size issues
+    train_loader_aux_in_cor = torch.utils.data.DataLoader(
+        train_aux_in_data_cor_final,
+        batch_size=state['batch_size'], shuffle=True,
+        num_workers=state['prefetch'], pin_memory=True, drop_last=True)
+
+
+    #for out-distribution component of mixture
+    train_loader_aux_out = torch.utils.data.DataLoader(
+        train_aux_out_data_final,
+        batch_size=state['batch_size'], shuffle=True,
+        num_workers=state['prefetch'], pin_memory=True, drop_last=True)
+
+
+    valid_loader_aux = torch.utils.data.DataLoader(
+         valid_aux_data_final,
+         batch_size=state['batch_size'], shuffle=False,
+         num_workers=state['prefetch'], pin_memory=True, drop_last=True)
+
+
+
+    test_loader_in = torch.utils.data.DataLoader(
+        test_in_data,
+        batch_size=state['batch_size'], shuffle=False,
+        num_workers=state['prefetch'], pin_memory=True)
+
+
+    test_loader_cor = torch.utils.data.DataLoader(
+        test_in_data_cor,
+        batch_size=state['batch_size'], shuffle=False,
+        num_workers=state['prefetch'], pin_memory=True)
+
+
+    # test loader for ood
+    test_loader_out = torch.utils.data.DataLoader(
+        test_out_data,
+        batch_size=state['batch_size'], shuffle=False,
+        num_workers=state['prefetch'], pin_memory=True)
+
+
+    return train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, train_loader_aux_out, test_loader_in, test_loader_cor, test_loader_out, valid_loader_in, valid_loader_aux
+    
 
 def make_datasets(in_dset, aux_out_dset, test_out_dset, state, alpha, pi_1, pi_2, cortype):
 

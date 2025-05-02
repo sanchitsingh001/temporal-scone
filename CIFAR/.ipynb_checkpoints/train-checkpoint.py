@@ -2,6 +2,8 @@
 from sklearn.metrics import det_curve, accuracy_score, roc_auc_score
 from make_datasets import *
 from models.wrn_ssnd import *
+from torch.utils.data import DataLoader, Subset
+
 
 from models.mlp import *
 
@@ -242,6 +244,74 @@ state['OOD_scores_Ptest'] = []
 state['in_dist_constraint'] = []
 state['train_loss_constraint'] = []
 
+state['atc_city_0'] = []
+state['atc_city_1'] = []
+state['atc_city_2'] = []
+state['atc_diff_01'] = []
+
+
+def split_loader_into_cities(dataset, batch_size=128, num_workers=4, T=3, seed=42):
+    rng = np.random.default_rng(seed)
+    indices = np.arange(len(dataset))
+    rng.shuffle(indices)
+    city_splits = np.array_split(indices, T)
+    return [
+        DataLoader(
+            Subset(dataset, split),
+            batch_size=batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            pin_memory=True,
+            drop_last=False
+        )
+        for split in city_splits
+    ]
+
+def make_mixed_city_loader(city_loader_in, city_loader_aux_in, city_loader_aux_cor, city_loader_aux_out, batch_size, pi_1, pi_2, seed=42):
+    rng = np.random.default_rng(seed)
+    all_data = []
+
+    for (in_set, aux_in_set, aux_in_cor_set, aux_out_set) in zip(city_loader_in, city_loader_aux_in, city_loader_aux_cor, city_loader_aux_out):
+        # Mix the batches
+        clean_data = in_set[0]
+        cor_data = aux_in_cor_set[0]
+        out_data = aux_out_set[0]
+
+        # Create masks
+        n_total = clean_data.shape[0]
+        n_clean = int(n_total * (1.0 - pi_1 - pi_2))
+        n_cor = int(n_total * pi_1)
+        n_out = int(n_total * pi_2)
+
+        idx_clean = rng.choice(clean_data.shape[0], n_clean, replace=False)
+        idx_cor = rng.choice(cor_data.shape[0], n_cor, replace=False)
+        idx_out = rng.choice(out_data.shape[0], n_out, replace=False)
+
+        # Concatenate
+        mixed_batch = torch.cat([
+            clean_data[idx_clean],
+            cor_data[idx_cor],
+            out_data[idx_out]
+        ], dim=0)
+
+        all_data.append(mixed_batch)
+
+    mixed_dataset = torch.cat(all_data, dim=0)
+    mixed_labels = torch.zeros(len(mixed_dataset))  # dummy labels (not used)
+
+    mixed_loader = DataLoader(
+        TensorDataset(mixed_dataset, mixed_labels),
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True,
+        drop_last=False
+    )
+
+    return mixed_loader
+
+
+
 def to_np(x): return x.data.cpu().numpy()
 
 torch.manual_seed(args.seed)
@@ -249,6 +319,43 @@ rng = np.random.default_rng(args.seed)
 
 #make the data_loaders
 train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, train_loader_aux_out, test_loader_in, test_loader_cor, test_loader_ood, valid_loader_in, valid_loader_aux = make_datasets(args.dataset, args.aux_out_dataset, args.test_out_dataset, state, args.alpha, args.pi_1, args.pi_2, args.cortype)
+
+train_loader_in_cities = split_loader_into_cities(train_loader_in.dataset, batch_size=args.batch_size, num_workers=args.prefetch, T=3, seed=args.seed)
+train_loader_aux_in_cities = split_loader_into_cities(train_loader_aux_in.dataset, batch_size=args.batch_size, num_workers=args.prefetch, T=3, seed=args.seed)
+train_loader_aux_cor_cities = split_loader_into_cities(train_loader_aux_in_cor.dataset, batch_size=args.batch_size, num_workers=args.prefetch, T=3, seed=args.seed)
+train_loader_aux_out_cities = split_loader_into_cities(train_loader_aux_out.dataset, batch_size=args.batch_size, num_workers=args.prefetch, T=3, seed=args.seed)
+
+
+
+# === Setup City Splits ===
+city_loader_splits = split_loader_into_cities(train_loader_in.dataset, batch_size=args.batch_size, num_workers=args.prefetch, T=3, seed=args.seed)
+city_loader_in_0 = city_loader_splits[0]
+city_loader_in_1 = city_loader_splits[1]
+city_loader_in_2 = city_loader_splits[2]
+
+city_mixed_loader_0 = make_mixed_city_loader(
+    train_loader_in_cities[0],
+    train_loader_aux_in_cities[0],
+    train_loader_aux_cor_cities[0],
+    train_loader_aux_out_cities[0],
+    batch_size=args.batch_size, pi_1=args.pi_1, pi_2=args.pi_2, seed=args.seed
+)
+
+city_mixed_loader_1 = make_mixed_city_loader(
+    train_loader_in_cities[1],
+    train_loader_aux_in_cities[1],
+    train_loader_aux_cor_cities[1],
+    train_loader_aux_out_cities[1],
+    batch_size=args.batch_size, pi_1=args.pi_1, pi_2=args.pi_2, seed=args.seed
+)
+
+city_mixed_loader_2 = make_mixed_city_loader(
+    train_loader_in_cities[2],
+    train_loader_aux_in_cities[2],
+    train_loader_aux_cor_cities[2],
+    train_loader_aux_out_cities[2],
+    batch_size=args.batch_size, pi_1=args.pi_1, pi_2=args.pi_2, seed=args.seed
+)
 
 
 print("\n len(train_loader_in.dataset) {} " \
@@ -462,9 +569,24 @@ def fpr_and_fdr_at_recall(y_true, y_score, recall_level, pos_label=1.):
 
     return fps[cutoff] / (np.sum(np.logical_not(y_true)))   # , fps[cutoff]/(fps[cutoff] + tps[cutoff])
 
+def compute_entropy_atc(model, dataloader, delta=1.5, device='cuda'):
+    model.eval()
+    all_entropies = []
+    with torch.no_grad():
+        for x, _ in dataloader:
+            x = x.to(device)
+            logits = model(x)
+            probs = F.softmax(logits, dim=1)
+            entropy = -torch.sum(probs * torch.log(probs + 1e-12), dim=1)
+            all_entropies.append(entropy)
+    entropies = torch.cat(all_entropies)
+    atc = (entropies < delta).float().mean().item()
+    return atc
 
 
-def train(epoch,city_loader_in, city_loader_aux_in, city_loader_aux_cor, city_loader_aux_out,city_index):
+
+
+def train(epoch,city_loader_in, city_loader_aux_in, city_loader_aux_cor, city_loader_aux_out, city_mixed_loader, city_index):
     '''
     Train the model using the specified score
     '''
@@ -507,7 +629,8 @@ def train(epoch,city_loader_in, city_loader_aux_in, city_loader_aux_cor, city_lo
     city_loader_in,
     city_loader_aux_in,
     city_loader_aux_cor,
-    city_loader_aux_out
+    city_loader_aux_out,
+
 )
 
     for in_set, aux_in_set, aux_in_cor_set, aux_out_set in city_loader:
@@ -775,6 +898,20 @@ def train(epoch,city_loader_in, city_loader_aux_in, city_loader_aux_cor, city_lo
         if args.score in ['scone', 'woods'] and ce_constraint > args.constraint_tol:
             print('increasing ce_constraint_weight weight....\n')
             ce_constraint_weight *= args.penalty_mult
+
+    # ATC penalty settings
+    delta = 1.5
+    epsilon = 0.05
+    lambda_atc = 1.0
+
+    # Compute entropy-based ATC on city loaders
+    atc_city = compute_entropy_atc(net, city_mixed_loader, delta)
+
+    print(f"[ATC] City {city_index}: {atc_city:.3f}")
+
+    # Save per city
+    state[f'atc_city_{city_index}'].append(atc_city)
+
 
 
 def compute_constraint_terms(city_loader_in):
@@ -1183,9 +1320,15 @@ def split_loader_into_cities(dataloader, T=3, seed=42):
 
 loaders = make_datasets(in_dset='cifar10', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
 
+city_1_loaders = make_datasets(in_dset='cifar10', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
+
+city_0_loaders = make_any_Dataset(in_dset='../data/flowers10/', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
+
+city_2_loaders = make_any_Dataset(in_dset='../data/cub200_split_10/', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
+
 train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, \
 train_loader_aux_out, test_loader_in, test_loader_cor, \
-test_loader_out, valid_loader_in, valid_loader_aux = loaders
+test_loader_out, valid_loader_in, valid_loader_aux = city_0_loaders
 
 
 T = 3  # number of city splits
@@ -1200,13 +1343,36 @@ import time
 T = 3  # number of cities
 total_epochs_per_city = args.epochs
 
+
+city_loaders = [
+    city_0_loaders,
+    city_1_loaders,
+    city_2_loaders,
+]
+
 for t in range(T):
     print(f"\n=======================\nTraining on City {t}\n=======================")
-
+    # train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, \
+    # train_loader_aux_out, test_loader_in, test_loader_cor, \
+    # test_loader_out, valid_loader_in, valid_loader_aux = city_loaders[t]
+    
     city_loader_in = train_loader_in_cities[t]
     city_loader_aux_in = train_loader_aux_in_cities[t]
     city_loader_aux_cor = train_loader_aux_cor_cities[t]
     city_loader_aux_out = train_loader_aux_out_cities[t]
+
+    city_mixed_loader = make_mixed_city_loader(
+    city_loader_in,
+    city_loader_aux_in,
+    city_loader_aux_cor,
+    city_loader_aux_out,
+    batch_size=args.batch_size,
+    pi_1=args.pi_1,
+    pi_2=args.pi_2,
+    seed=args.seed
+)
+
+
 
     if args.score in [ 'woods_nn', 'woods', 'scone']:
         full_train_loss = evaluate_classification_loss_training(city_loader_in)
@@ -1221,10 +1387,13 @@ for t in range(T):
               city_loader_in,
               city_loader_aux_in,
               city_loader_aux_cor,
-              city_loader_aux_out, t)
+              city_loader_aux_out,
+              city_mixed_loader, t)
 
         test(global_epoch)
         scheduler.step()
+    
+        
         
 
 state['best_epoch_valid'] = epoch
@@ -1246,6 +1415,37 @@ wandb.log({"best_epoch_valid": state['best_epoch_valid'],
             "val_wild_total_at_best": state['val_wild_total_at_best'],
             "val_wild_class_as_in_at_best": state['val_wild_class_as_in_at_best']
             })
+print("\n=== Comparing ATC across cities ===")
+
+delta = 1.5  # same delta threshold
+
+# Recompute final ATC for each city
+atc_city_0 = compute_entropy_atc(net, city_mixed_loader_0, delta)
+atc_city_1 = compute_entropy_atc(net, city_mixed_loader_1, delta)
+atc_city_2 = compute_entropy_atc(net, city_mixed_loader_2, delta)
+
+print(f"ATC City 0: {atc_city_0:.3f}")
+print(f"ATC City 1: {atc_city_1:.3f}")
+print(f"ATC City 2: {atc_city_2:.3f}")
+
+# Compute differences
+atc_diff_01 = abs(atc_city_0 - atc_city_1)
+atc_diff_12 = abs(atc_city_1 - atc_city_2)
+atc_diff_02 = abs(atc_city_0 - atc_city_2)
+
+print(f"ATC Diff (City 0 vs 1): {atc_diff_01:.3f}")
+print(f"ATC Diff (City 1 vs 2): {atc_diff_12:.3f}")
+print(f"ATC Diff (City 0 vs 2): {atc_diff_02:.3f}")
+
+# Save ATC results into wandb or state
+wandb.log({
+    "final_atc_city_0": atc_city_0,
+    "final_atc_city_1": atc_city_1,
+    "final_atc_city_2": atc_city_2,
+    "final_atc_diff_01": atc_diff_01,
+    "final_atc_diff_12": atc_diff_12,
+    "final_atc_diff_02": atc_diff_02,
+})
 
 # save model checkpoint
 #args.checkpoints_dir = './checkpoints/save/'

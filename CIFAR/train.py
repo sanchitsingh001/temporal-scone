@@ -1320,9 +1320,15 @@ def split_loader_into_cities(dataloader, T=3, seed=42):
 
 loaders = make_datasets(in_dset='cifar10', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
 
+city_1_loaders = make_datasets(in_dset='cifar10', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
+
+city_0_loaders = make_any_Dataset(in_dset='../data/flowers10/', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
+
+city_2_loaders = make_any_Dataset(in_dset='../data/cub200_split_10/', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
+
 train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, \
 train_loader_aux_out, test_loader_in, test_loader_cor, \
-test_loader_out, valid_loader_in, valid_loader_aux = loaders
+test_loader_out, valid_loader_in, valid_loader_aux = city_0_loaders
 
 
 T = 3  # number of city splits
@@ -1337,9 +1343,19 @@ import time
 T = 3  # number of cities
 total_epochs_per_city = args.epochs
 
+
+city_loaders = [
+    city_0_loaders,
+    city_1_loaders,
+    city_2_loaders,
+]
+
 for t in range(T):
     print(f"\n=======================\nTraining on City {t}\n=======================")
-
+    # train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, \
+    # train_loader_aux_out, test_loader_in, test_loader_cor, \
+    # test_loader_out, valid_loader_in, valid_loader_aux = city_loaders[t]
+    
     city_loader_in = train_loader_in_cities[t]
     city_loader_aux_in = train_loader_aux_in_cities[t]
     city_loader_aux_cor = train_loader_aux_cor_cities[t]
