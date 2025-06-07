@@ -51,7 +51,7 @@ def boolean_string(s):
 
 parser = argparse.ArgumentParser(description='Tunes a CIFAR Classifier with OE',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-parser.add_argument('dataset', type=str, choices=['cifar10', 'cifar100', 'MNIST'],
+parser.add_argument('dataset', type=str, choices=['cifar10', 'cifar100', 'MNIST','cinic10'],
                     default='MNIST', # default cifar10
                     help='Choose between CIFAR-10, CIFAR-100, MNIST.')
 parser.add_argument('--model', '-m', type=str, default='mlp', # default allconv
@@ -204,7 +204,7 @@ print(state)
 #save wandb hyperparameters
 # wandb.config = state
 
-wandb.init(project="oodproject", entity="ood_learning", config=state)
+wandb.init(project="oodproject", config=state)
 state['wandb_name'] = wandb.run.name
 
 # store train, test, and valid FPR95
@@ -248,6 +248,7 @@ state['atc_city_0'] = []
 state['atc_city_1'] = []
 state['atc_city_2'] = []
 state['atc_diff_01'] = []
+state['atc_per_epoch'] = []
 
 
 def split_loader_into_cities(dataset, batch_size=128, num_workers=4, T=3, seed=42):
@@ -317,76 +318,11 @@ def to_np(x): return x.data.cpu().numpy()
 torch.manual_seed(args.seed)
 rng = np.random.default_rng(args.seed)
 
-#make the data_loaders
-train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, train_loader_aux_out, test_loader_in, test_loader_cor, test_loader_ood, valid_loader_in, valid_loader_aux = make_datasets(args.dataset, args.aux_out_dataset, args.test_out_dataset, state, args.alpha, args.pi_1, args.pi_2, args.cortype)
-
-train_loader_in_cities = split_loader_into_cities(train_loader_in.dataset, batch_size=args.batch_size, num_workers=args.prefetch, T=3, seed=args.seed)
-train_loader_aux_in_cities = split_loader_into_cities(train_loader_aux_in.dataset, batch_size=args.batch_size, num_workers=args.prefetch, T=3, seed=args.seed)
-train_loader_aux_cor_cities = split_loader_into_cities(train_loader_aux_in_cor.dataset, batch_size=args.batch_size, num_workers=args.prefetch, T=3, seed=args.seed)
-train_loader_aux_out_cities = split_loader_into_cities(train_loader_aux_out.dataset, batch_size=args.batch_size, num_workers=args.prefetch, T=3, seed=args.seed)
 
 
 
-# === Setup City Splits ===
-city_loader_splits = split_loader_into_cities(train_loader_in.dataset, batch_size=args.batch_size, num_workers=args.prefetch, T=3, seed=args.seed)
-city_loader_in_0 = city_loader_splits[0]
-city_loader_in_1 = city_loader_splits[1]
-city_loader_in_2 = city_loader_splits[2]
 
-city_mixed_loader_0 = make_mixed_city_loader(
-    train_loader_in_cities[0],
-    train_loader_aux_in_cities[0],
-    train_loader_aux_cor_cities[0],
-    train_loader_aux_out_cities[0],
-    batch_size=args.batch_size, pi_1=args.pi_1, pi_2=args.pi_2, seed=args.seed
-)
-
-city_mixed_loader_1 = make_mixed_city_loader(
-    train_loader_in_cities[1],
-    train_loader_aux_in_cities[1],
-    train_loader_aux_cor_cities[1],
-    train_loader_aux_out_cities[1],
-    batch_size=args.batch_size, pi_1=args.pi_1, pi_2=args.pi_2, seed=args.seed
-)
-
-city_mixed_loader_2 = make_mixed_city_loader(
-    train_loader_in_cities[2],
-    train_loader_aux_in_cities[2],
-    train_loader_aux_cor_cities[2],
-    train_loader_aux_out_cities[2],
-    batch_size=args.batch_size, pi_1=args.pi_1, pi_2=args.pi_2, seed=args.seed
-)
-
-
-print("\n len(train_loader_in.dataset) {} " \
-      "len(train_loader_aux_in.dataset) {}, " \
-      "len(train_loader_aux_in_cor.dataset) {}, "\
-      "len(train_loader_aux_out.dataset) {}, " \
-      "len(test_loader_mnist.dataset) {}, " \
-      "len(test_loader_cor.dataset) {}, " \
-      "len(test_loader_ood.dataset) {}, " \
-      "len(valid_loader_in.dataset) {}, " \
-      "len(valid_loader_aux.dataset) {}".format(
-    len(train_loader_in.dataset),
-    len(train_loader_aux_in.dataset),
-    len(train_loader_aux_in_cor.dataset),
-    len(train_loader_aux_out.dataset),
-    len(test_loader_in.dataset),
-    len(test_loader_cor.dataset),
-    len(test_loader_ood.dataset),
-    len(valid_loader_in.dataset),
-    len(valid_loader_aux.dataset)))
-
-state['train_in_size'] = len(train_loader_in.dataset)
-state['train_aux_in_size'] = len(train_loader_aux_in.dataset)
-state['train_aux_out_size'] = len(train_loader_aux_out.dataset)
-state['valid_in_size'] = len(valid_loader_in.dataset)
-state['valid_aux_size'] = len(valid_loader_aux.dataset)
-state['test_in_size'] = len(test_loader_in.dataset)
-state['test_in_cor_size'] = len(test_loader_cor.dataset)
-state['test_out_size'] = len(test_loader_ood.dataset)
-
-if args.dataset in ['cifar10']:
+if args.dataset in ['cifar10','cinic10']:
     num_classes = 10
 elif args.dataset in ['cifar100']:
     num_classes = 100
@@ -412,8 +348,9 @@ if args.load_pretrained == 'snapshots/pretrained':
     print('Restoring trained model...')
     for i in range(200, -1, -1):
 
-        model_name = os.path.join(args.load_pretrained, args.dataset + '_' + args.model +
-                                  '_pretrained_epoch_' + str(i) + '.pt')
+        #model_name = os.path.join(args.load_pretrained, args.dataset + '_' + args.model +
+                                #  '_pretrained_epoch_' + str(i) + '.pt')
+        model_name = "snapshots/pretrained/cinic10_wrn_pretrained_epoch_0.pt"
         #model_name = os.path.join(args.load_pretrained, 'in_ratio_50_cifar100_wrn_pretrained_epoch_' + str(i) + '.pt')
         if os.path.isfile(model_name):
             print('found pretrained model: {}'.format(model_name))
@@ -583,10 +520,25 @@ def compute_entropy_atc(model, dataloader, delta=1.5, device='cuda'):
     atc = (entropies < delta).float().mean().item()
     return atc
 
+def compute_atc_max_softmax(model, dataloader, delta=0.9, device='cuda'):
+    model.eval()
+    all_confidences = []
+    with torch.no_grad():
+        for x, _ in dataloader:
+            x = x.to(device)
+            logits = model(x)
+            probs = F.softmax(logits, dim=1)
+            max_conf = torch.max(probs, dim=1)[0]  # Take max prob per sample
+            all_confidences.append(max_conf)
+    confidences = torch.cat(all_confidences)
+    atc = (confidences >= delta).float().mean().item()
+    return atc
 
+prev_atc_maxsoft = None
+prev_fpr = None
+temporal_loss = 0
 
-
-def train(epoch,city_loader_in, city_loader_aux_in, city_loader_aux_cor, city_loader_aux_out, city_mixed_loader, city_index):
+def train(epoch,city_loader_in, city_loader_aux_in, city_loader_aux_cor, city_loader_aux_out, city_mixed_loader, city_index, temporal_loss):
     '''
     Train the model using the specified score
     '''
@@ -595,7 +547,9 @@ def train(epoch,city_loader_in, city_loader_aux_in, city_loader_aux_cor, city_lo
     # make the variables global for optimization purposes
     global in_constraint_weight
     global ce_constraint_weight
-
+    global prev_atc_entropy
+    global prev_fpr
+    
     # declare lam global
     if args.score in ['woods_nn',  'woods', 'scone']:
         global lam
@@ -754,7 +708,25 @@ def train(epoch,city_loader_in, city_loader_aux_in, city_loader_aux_cor, city_lo
             else:
                 loss_ce = - torch.pow(lam2, 2) * 0.5 / ce_constraint_weight
 
-            loss = loss_ce + args.out_constraint_weight*loss_energy_out + in_loss
+            # delta = 0.05  # ε from the paper
+            # gamma = 0.05  # γ from the paper
+            # lambda_temp = 1.0  # or args.lambda_temp if configurable
+            # current_atc = compute_atc_max_softmax(net, city_mixed_loader, delta=0.9)
+            # if len(state['OOD_scores_Ptest']) > 0 and len(state['OOD_scores_P0_test']) > 0:
+            #     current_fpr = compute_fnr(np.array(state['OOD_scores_Ptest'][-1]), np.array(state['OOD_scores_P0_test'][-1]))
+            # else:
+            #     current_fpr = 0.0
+            
+            # if prev_atc_maxsoft is not None and prev_fpr is not None:
+            #     temporal_penalty = (
+            #         torch.tensor(max(0.0, abs(current_atc - prev_atc_maxsoft) - delta)).cuda()
+            #         + torch.tensor(max(0.0, abs(current_fpr - prev_fpr) - gamma)).cuda()
+            #     )
+            #     temporal_loss = lambda_temp * temporal_penalty
+            # else:
+            #     temporal_loss = torch.tensor(0.0).cuda()
+            
+            loss = loss_ce + args.out_constraint_weight*loss_energy_out + in_loss 
 
             #wandb
             in_losses.append(in_loss.item())
@@ -777,12 +749,12 @@ def train(epoch,city_loader_in, city_loader_aux_in, city_loader_aux_cor, city_lo
     out_loss_weighted_avg = np.mean(out_losses_weighted)
     loss_avg = np.mean(losses)
     train_acc_avg = np.mean(train_accuracies)
-
+    
     wandb.log({
         'epoch':epoch,
         'city': city_index,
         "learning rate": optimizer.param_groups[0]['lr'],
-        'CE loss':loss_ce_avg,
+        f'CE loss City {city_index}': loss_ce_avg,
         'in loss':in_loss_avg,
         'out loss':out_loss_avg,
         'out loss (weighted)':out_loss_weighted_avg,
@@ -905,14 +877,36 @@ def train(epoch,city_loader_in, city_loader_aux_in, city_loader_aux_cor, city_lo
     lambda_atc = 1.0
 
     # Compute entropy-based ATC on city loaders
-    atc_city = compute_entropy_atc(net, city_mixed_loader, delta)
+    atc_entropy = compute_entropy_atc(net, city_mixed_loader, delta=1.5)
+    atc_maxsoft = compute_atc_max_softmax(net, city_mixed_loader, delta=0.9)
+    
+    # print(f"[ATC] City {city_index} | Entropy: {atc_entropy:.3f} | Max-Softmax: {atc_maxsoft:.3f}")
+    
+    # # Save to state
+    # state[f'atc_city_{city_index}'].append(atc_entropy)
+    # state.setdefault(f'atc_city_{city_index}_maxsoft', []).append(atc_maxsoft)
+    
+    state.setdefault('atc_entropy_per_epoch', []).append(atc_entropy)
+    state.setdefault('atc_maxsoft_per_epoch', []).append(atc_maxsoft)
+    
+    # Log globally (not just per city)
+    wandb.log({
+        'atc_entropy': atc_entropy,
+        'atc_maxsoft': atc_maxsoft,
+        'epoch': epoch
+    })
+    atc_entropy_cov = compute_entropy_atc(net, city_loader_aux_cor, delta=1.5)
+    atc_maxsoft_cov = compute_atc_max_softmax(net, city_loader_aux_cor, delta=0.9)
 
-    print(f"[ATC] City {city_index}: {atc_city:.3f}")
-
-    # Save per city
-    state[f'atc_city_{city_index}'].append(atc_city)
-
-
+    # Log globally like mixed ATC
+    state.setdefault('atc_entropy_cov_per_epoch', []).append(atc_entropy_cov)
+    state.setdefault('atc_maxsoft_cov_per_epoch', []).append(atc_maxsoft_cov)
+    
+    wandb.log({
+        'atc_entropy_cov': atc_entropy_cov,
+        'atc_maxsoft_cov': atc_maxsoft_cov,
+        'epoch': epoch
+    })
 
 def compute_constraint_terms(city_loader_in):
     '''
@@ -983,7 +977,11 @@ def compute_auroc(out_scores, in_scores):
 
 
 # test function
-def test(epoch):
+def test(epoch,test_loader_in,
+         test_loader_cor,
+         test_loader_ood,
+         valid_loader_in,
+         valid_loader_aux):
     """
     tests current model
 
@@ -1318,25 +1316,50 @@ def split_loader_into_cities(dataloader, T=3, seed=42):
         for split in city_splits
     ]
 
-loaders = make_datasets(in_dset='cifar10', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
 
-city_1_loaders = make_datasets(in_dset='cifar10', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
+city_0_loaders = make_datasets(in_dset='cifar10', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
 
-city_0_loaders = make_any_Dataset(in_dset='../data/flowers10/', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
+city_1_loaders = make_any_Dataset(in_dset='../data/CINIC/', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
 
 city_2_loaders = make_any_Dataset(in_dset='../data/cub200_split_10/', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
 
-train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, \
-train_loader_aux_out, test_loader_in, test_loader_cor, \
-test_loader_out, valid_loader_in, valid_loader_aux = city_0_loaders
-
-
 T = 3  # number of city splits
 
-train_loader_in_cities       = split_loader_into_cities(train_loader_in, T)
-train_loader_aux_in_cities   = split_loader_into_cities(train_loader_aux_in, T)
-train_loader_aux_cor_cities  = split_loader_into_cities(train_loader_aux_in_cor, T)
-train_loader_aux_out_cities  = split_loader_into_cities(train_loader_aux_out, T)
+# train_loader_in_cities       = split_loader_into_cities(train_loader_in, T)
+# train_loader_aux_in_cities   = split_loader_into_cities(train_loader_aux_in, T)
+# train_loader_aux_cor_cities  = split_loader_into_cities(train_loader_aux_in_cor, T)
+# train_loader_aux_out_cities  = split_loader_into_cities(train_loader_aux_out, T)
+
+def compute_temporal_loss_and_log(global_epoch, city_mixed_loader, state, prev_atc, prev_fpr):
+    delta = 0.05
+    gamma = 0.05
+    lambda_temp = 1.0
+
+    current_atc = compute_atc_max_softmax(net, city_mixed_loader, delta=0.9)
+
+    if len(state['OOD_scores_Ptest']) > 0 and len(state['OOD_scores_P0_test']) > 0:
+        current_fpr = compute_fnr(np.array(state['OOD_scores_Ptest'][-1]), np.array(state['OOD_scores_P0_test'][-1]))
+    else:
+        current_fpr = 0.0
+
+    if prev_atc is not None and prev_fpr is not None:
+        atc_diff = abs(current_atc - prev_atc)
+        fpr_diff = abs(current_fpr - prev_fpr)
+        temporal_penalty = max(0.0, atc_diff - delta) + max(0.0, fpr_diff - gamma)
+        temporal_loss = lambda_temp * temporal_penalty
+    else:
+        atc_diff = 0.0
+        fpr_diff = 0.0
+        temporal_loss = 0.0
+
+    wandb.log({
+        "temporal_loss": temporal_loss,
+        "atc_maxsoft_change": atc_diff,
+        "fpr_change": fpr_diff,
+        "epoch": global_epoch
+    })
+
+    return current_atc, current_fpr, temporal_loss
 
 
 import time
@@ -1349,23 +1372,102 @@ city_loaders = [
     city_1_loaders,
     city_2_loaders,
 ]
+from torch.utils.data import Subset
+import random
+
+def subsample_loader(loader, target_size, seed=42):
+    random.seed(seed)
+    dataset = loader.dataset
+    indices = list(range(len(dataset)))
+    random.shuffle(indices)
+    selected_indices = indices[:target_size]
+    subset = Subset(dataset, selected_indices)
+    new_loader = torch.utils.data.DataLoader(
+        subset,
+        batch_size=loader.batch_size,
+        shuffle=loader.shuffle if hasattr(loader, 'shuffle') else False,
+        num_workers=loader.num_workers,
+        pin_memory=True
+    )
+    return new_loader
+
+# city_1_loaders = list(city_1_loaders)  # unpack tuple if not already mutable
+# # Define the sample sizes of City 0
+# target_sizes = {
+#     "train_loader_in": 25000,
+#     "train_loader_aux_in": 15000,
+#     "train_loader_aux_in_cor": 30000,
+#     "train_loader_aux_out": 4901,
+#     "test_loader_in": 10000,
+#     "test_loader_cor": 10000,
+#     "test_loader_out": 3001,
+#     "valid_loader_in": 2500,
+#     "valid_loader_aux": 7500,
+# }
+
+# city_1_loaders[0] = subsample_loader(city_1_loaders[0], target_sizes["train_loader_in"])
+# city_1_loaders[1] = subsample_loader(city_1_loaders[1], target_sizes["train_loader_aux_in"])
+# city_1_loaders[2] = subsample_loader(city_1_loaders[2], target_sizes["train_loader_aux_in_cor"])
+# city_1_loaders[3] = subsample_loader(city_1_loaders[3], target_sizes["train_loader_aux_out"])
+# city_1_loaders[4] = subsample_loader(city_1_loaders[4], target_sizes["test_loader_in"])
+# city_1_loaders[5] = subsample_loader(city_1_loaders[5], target_sizes["test_loader_cor"])
+# city_1_loaders[6] = subsample_loader(city_1_loaders[6], target_sizes["test_loader_out"])
+# city_1_loaders[7] = subsample_loader(city_1_loaders[7], target_sizes["valid_loader_in"])
+# city_1_loaders[8] = subsample_loader(city_1_loaders[8], target_sizes["valid_loader_aux"])
+# city_loaders[1] = city_1_loaders
+
+
+# for t in range(T):
+#     print(f"\n=======================\nTraining on City {t}\n=======================")
+#     train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, \
+#     train_loader_aux_out, test_loader_in, test_loader_cor, \
+#     test_loader_out, valid_loader_in, valid_loader_aux = city_loaders[t]
+    
+
+#     print(f"City {t} Sample Sizes:")
+#     print(f"  train_loader_in         : {len(train_loader_in.dataset)}")
+#     print(f"  train_loader_aux_in     : {len(train_loader_aux_in.dataset)}")
+#     print(f"  train_loader_aux_in_cor : {len(train_loader_aux_in_cor.dataset)}")
+#     print(f"  train_loader_aux_out    : {len(train_loader_aux_out.dataset)}")
+#     print(f"  test_loader_in          : {len(test_loader_in.dataset)}")
+#     print(f"  test_loader_cor         : {len(test_loader_cor.dataset)}")
+#     print(f"  test_loader_out         : {len(test_loader_out.dataset)}")
+#     print(f"  valid_loader_in         : {len(valid_loader_in.dataset)}")
+#     print(f"  valid_loader_aux        : {len(valid_loader_aux.dataset)}")
+
 
 for t in range(T):
     print(f"\n=======================\nTraining on City {t}\n=======================")
-    # train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, \
-    # train_loader_aux_out, test_loader_in, test_loader_cor, \
-    # test_loader_out, valid_loader_in, valid_loader_aux = city_loaders[t]
-    
-    city_loader_in = train_loader_in_cities[t]
-    city_loader_aux_in = train_loader_aux_in_cities[t]
-    city_loader_aux_cor = train_loader_aux_cor_cities[t]
-    city_loader_aux_out = train_loader_aux_out_cities[t]
+    train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, \
+    train_loader_aux_out, test_loader_in, test_loader_cor, \
+    test_loader_out, valid_loader_in, valid_loader_aux = city_loaders[t]
+    print(city_loaders[t])
+    # if t == 0:
+    #     new_lr = 0.0001
+    # elif t == 1:
+    #     new_lr = 0.0005
+    # else:
+    #     new_lr = state['learning_rate']  # fallback or leave as is
+
+    # for param_group in optimizer.param_groups:
+    #     param_group['lr'] = new_lr
+
+    # print(f"Updated learning rate to {new_lr} for City {t}")
+    # city_loader_in = train_loader_in_cities[t]
+    # city_loader_aux_in = train_loader_aux_in_cities[t]
+    # city_loader_aux_cor = train_loader_aux_cor_cities[t]
+    # city_loader_aux_out = train_loader_aux_out_cities[t]
+     # Split data for the city
+    # city_loader_in = split_loader_into_cities(train_loader_in, T=1)[0]
+    # city_loader_aux_in = split_loader_into_cities(train_loader_aux_in, T=1)[0]
+    # city_loader_aux_cor = split_loader_into_cities(train_loader_aux_in_cor, T=1)[0]
+    # city_loader_aux_out = split_loader_into_cities(train_loader_aux_out, T=1)[0]
 
     city_mixed_loader = make_mixed_city_loader(
-    city_loader_in,
-    city_loader_aux_in,
-    city_loader_aux_cor,
-    city_loader_aux_out,
+    train_loader_in,
+    train_loader_aux_in,
+    train_loader_aux_in_cor,
+    train_loader_aux_out,
     batch_size=args.batch_size,
     pi_1=args.pi_1,
     pi_2=args.pi_2,
@@ -1375,24 +1477,39 @@ for t in range(T):
 
 
     if args.score in [ 'woods_nn', 'woods', 'scone']:
-        full_train_loss = evaluate_classification_loss_training(city_loader_in)
+        full_train_loss = evaluate_classification_loss_training(train_loader_in)
 
     
     for epoch in range(total_epochs_per_city):
         global_epoch = t * total_epochs_per_city + epoch
         print('epoch', global_epoch + 1, '/', total_epochs_per_city * T)
         state['epoch'] = global_epoch
-
+        prev_atc_maxsoft, prev_fpr, temporal_loss = compute_temporal_loss_and_log(
+     global_epoch, city_mixed_loader, state, prev_atc_maxsoft, prev_fpr
+)
         train(global_epoch,
-              city_loader_in,
-              city_loader_aux_in,
-              city_loader_aux_cor,
-              city_loader_aux_out,
-              city_mixed_loader, t)
+              train_loader_in,
+              train_loader_aux_in,
+              train_loader_aux_in_cor,
+              train_loader_aux_out,
+              city_mixed_loader, t, temporal_loss)
 
-        test(global_epoch)
+        test(global_epoch,test_loader_in,
+         test_loader_cor,
+         test_loader_out,
+         valid_loader_in,
+         valid_loader_aux)
+       
+
         scheduler.step()
-    
+        prev_atc_maxsoft = compute_atc_max_softmax(net, city_mixed_loader, delta=0.9)
+        if len(state['OOD_scores_Ptest']) > 0 and len(state['OOD_scores_P0_test']) > 0:
+            prev_fpr = compute_fnr(
+                np.array(state['OOD_scores_Ptest'][-1]),
+                np.array(state['OOD_scores_P0_test'][-1])
+            )
+        else:
+            prev_fpr = 0.0
         
         
 
