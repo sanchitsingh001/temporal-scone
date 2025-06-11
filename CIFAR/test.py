@@ -1,136 +1,92 @@
-import os
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader
-from torchvision import datasets, transforms
+import torchvision.datasets as datasets
+import torchvision.transforms as transforms
+from load_any_dataset import load_cifar
+from make_datasets import make_datasets
+import numpy as np
 
-from models.wrn_ssnd import WideResNet  # adjust if your WRN model is in a different path
+def compare_tensors(tensor1, tensor2, name="", is_label=False):
+    """Compare two tensors and print their statistics"""
+    print(f"\nComparing {name}:")
+    print(f"Shape: {tensor1.shape} vs {tensor2.shape}")
+    
+    if not is_label:
+        print(f"Mean: {tensor1.mean():.4f} vs {tensor2.mean():.4f}")
+        print(f"Std: {tensor1.std():.4f} vs {tensor2.std():.4f}")
+        print(f"Min: {tensor1.min():.4f} vs {tensor2.min():.4f}")
+        print(f"Max: {tensor1.max():.4f} vs {tensor2.max():.4f}")
+        print(f"Are equal: {torch.allclose(tensor1, tensor2, rtol=1e-3, atol=1e-3)}")
+    else:
+        # For labels, compare unique values and their counts
+        unique1, counts1 = torch.unique(tensor1, return_counts=True)
+        unique2, counts2 = torch.unique(tensor2, return_counts=True)
+        print("Unique values in first tensor:", unique1.tolist())
+        print("Counts in first tensor:", counts1.tolist())
+        print("Unique values in second tensor:", unique2.tolist())
+        print("Counts in second tensor:", counts2.tolist())
+        print("Are equal:", torch.equal(tensor1, tensor2))
 
-# # ----------------------------
-# # Hyperparameters
-# # ----------------------------
-# batch_size = 128
-# learning_rate = 0.1
-# epochs = 100
-# seed = 42
-# save_dir = 'snapshots/pretrained'
-# save_name = 'cinic10_wrn_pretrained_epoch_{}.pt'
+def compare_loaders(loader1, loader2, name):
+    """Compare two dataloaders"""
+    print(f"\n=== Comparing {name} ===")
+    
+    # Handle None loaders
+    if loader1 is None or loader2 is None:
+        print(f"One or both loaders are None: {loader1 is None} vs {loader2 is None}")
+        return
+    
+    # Get batches from both loaders
+    batch1 = next(iter(loader1))
+    batch2 = next(iter(loader2))
+    
+    images1, labels1 = batch1
+    images2, labels2 = batch2
+    
+    # Compare images
+    compare_tensors(images1, images2, f"{name} Images")
+    
+    # Compare labels
+    compare_tensors(labels1, labels2, f"{name} Labels", is_label=True)
+    
+    # Compare loader properties
+    print(f"\nLoader properties for {name}:")
+    print(f"Batch size: {loader1.batch_size} vs {loader2.batch_size}")
+    print(f"Number of workers: {loader1.num_workers} vs {loader2.num_workers}")
+    print(f"Dataset size: {len(loader1.dataset)} vs {len(loader2.dataset)}")
+    print(f"Number of batches: {len(loader1)} vs {len(loader2)}")
 
-# # ----------------------------
-# # Dataset (CINIC-10)
-# # ----------------------------
-# transform = transforms.Compose([
-#     transforms.RandomHorizontalFlip(),
-#     transforms.RandomCrop(32, padding=4),
-#     transforms.ToTensor(),
-# ])
+def test_cifar10_loading():
+    # State parameters (matching make_datasets.py defaults)
+    state = {
+        'batch_size': 128,
+        'prefetch': 4,
+        'seed': 42
+    }
 
-# # Replace this path with the actual root of CINIC-10
-# cinic_root = '../data/CINIC/'  # should contain train/, valid/, test/ folders
+    print("\n=== Loading CIFAR10 using make_datasets.py ===")
+    # Using make_datasets.py with CIFAR10 for both in and out distribution
+    make_datasets_loaders = make_datasets(in_dset='cifar10', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
 
-# train_set = datasets.ImageFolder(os.path.join(cinic_root, 'train'), transform=transform)
-# val_set = datasets.ImageFolder(os.path.join(cinic_root, 'valid'), transform=transform)
+    
+    print("\n=== Loading CIFAR10 using load_cifar ===")
+    # Using load_cifar with default parameters
+    load_cifar_loaders = load_cifar()
+    
+    # Compare each loader pair
+    loader_names = [
+        "train_loader_in",
+        "train_loader_aux_in",
+        "train_loader_aux_in_cor",
+        "train_loader_aux_out",
+        "test_loader_in",
+        "test_loader_cor",
+        "test_loader_out",
+        "valid_loader_in",
+        "valid_loader_aux"
+    ]
+    
+    for name, loader1, loader2 in zip(loader_names, make_datasets_loaders, load_cifar_loaders):
+        compare_loaders(loader1, loader2, name)
 
-# train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
-# val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
-
-# # ----------------------------
-# # Model
-# # ----------------------------
-# num_classes = 10
-# net = WideResNet(depth=40, num_classes=num_classes, widen_factor=2, dropRate=0.3)
-# device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-# net = net.to(device)
-
-# # ----------------------------
-# # Training setup
-# # ----------------------------
-# criterion = nn.CrossEntropyLoss()
-# optimizer = optim.SGD(net.parameters(), lr=learning_rate, momentum=0.9, weight_decay=5e-4)
-# scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[int(epochs * 0.5), int(epochs * 0.75)], gamma=0.1)
-
-# # ----------------------------
-# # Training loop
-# # ----------------------------
-# os.makedirs(save_dir, exist_ok=True)
-
-# for epoch in range(epochs):
-#     net.train()
-#     total_loss = 0.0
-#     correct = 0
-#     total = 0
-
-#     for inputs, targets in train_loader:
-#         inputs, targets = inputs.to(device), targets.to(device)
-#         optimizer.zero_grad()
-#         outputs = net(inputs)
-#         loss = criterion(outputs, targets)
-#         loss.backward()
-#         optimizer.step()
-
-#         total_loss += loss.item() * targets.size(0)
-#         _, predicted = outputs.max(1)
-#         correct += predicted.eq(targets).sum().item()
-#         total += targets.size(0)
-
-#     scheduler.step()
-
-#     acc = 100. * correct / total
-#     avg_loss = total_loss / total
-#     print(f'Epoch {epoch+1}/{epochs} | Train Loss: {avg_loss:.4f} | Acc: {acc:.2f}%')
-
-#     # Save model checkpoint
-#     torch.save(net.state_dict(), os.path.join(save_dir, save_name.format(epoch)))
-#     print(f"Checkpoint saved: {save_name.format(epoch)}")
-
-# print("Training complete.")
-# ----------------------------
-# Load test set
-# ----------------------------
-
-# ----------------------------
-# Settings
-# ----------------------------
-model_name = "snapshots/pretrained/cifar10_wrn_pretrained_epoch_99.pt"
-cinic_root = "../data/CINIC/"  # path containing test/ folder
-batch_size = 128
-
-# ----------------------------
-# Transforms
-# ----------------------------
-transform = transforms.Compose([
-    transforms.ToTensor(),
-])
-
-# ----------------------------
-# Load test set
-# ----------------------------
-test_set = datasets.ImageFolder(os.path.join(cinic_root, 'test'), transform=transform)
-test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
-
-# ----------------------------
-# Load model
-# ----------------------------
-num_classes = 10
-net = WideResNet(depth=40, num_classes=num_classes, widen_factor=2, dropRate=0.3)
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-net.load_state_dict(torch.load(model_name, map_location=device))
-net = net.to(device)
-net.eval()
-
-# ----------------------------
-# Evaluate on test set
-# ----------------------------
-correct = 0
-total = 0
-with torch.no_grad():
-    for inputs, targets in test_loader:
-        inputs, targets = inputs.to(device), targets.to(device)
-        outputs = net(inputs)
-        _, predicted = outputs.max(1)
-        correct += predicted.eq(targets).sum().item()
-        total += targets.size(0)
-
-test_acc = 100. * correct / total
-print(f"Test Accuracy (epoch 99): {test_acc:.2f}%")
+if __name__ == "__main__":
+    test_cifar10_loading()
