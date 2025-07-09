@@ -53,7 +53,7 @@ def boolean_string(s):
 
 parser = argparse.ArgumentParser(description='Tunes a CIFAR Classifier with OE',
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-parser.add_argument('dataset', type=str, choices=['cifar10', 'cifar100', 'MNIST','cinic10', 'clear'],
+parser.add_argument('dataset', type=str, choices=['cifar10', 'cifar100', 'MNIST','cinic10'],
                     default='MNIST', # default cifar10
                     help='Choose between CIFAR-10, CIFAR-100, MNIST.')
 parser.add_argument('--model', '-m', type=str, default='mlp', # default allconv
@@ -122,7 +122,7 @@ parser.add_argument('--cortype', type=str, default='gaussian_noise', help='corru
 ###scone/woods/woods_nn specific
 parser.add_argument('--in_constraint_weight', type=float, default=1,
                     help='weight for in-distribution penalty in loss function')
-parser.add_argument('--out_constraint_weight', type=float, default=2,
+parser.add_argument('--out_constraint_weight', type=float, default=1,
                     help='weight for out-of-distribution penalty in loss function')
 parser.add_argument('--ce_constraint_weight', type=float, default=1,
                     help='weight for classification penalty in loss function')
@@ -156,18 +156,7 @@ parser.add_argument('--energy_vos_lambda', type=float, default=2, help='energy v
 
 # OE specific
 parser.add_argument('--oe_lambda', type=float, default=.5, help='OE weight')
-parser.add_argument('--temporal_loss_enabled', type=boolean_string, default='False', help='Enable temporal loss for stability across epochs')
-parser.add_argument('--temporal_lambda', type=float, default=1.0, help='Weight for temporal loss component')
-parser.add_argument('--temporal_delta_atc', type=float, default=0.05, help='Tolerance for ATC change in temporal loss')
-parser.add_argument('--temporal_delta_fpr', type=float, default=0.05, help='Tolerance for FPR change in temporal loss')
-parser.add_argument('--temporal_window', type=int, default=1, help='Number of previous epochs to consider for temporal loss')
 
-
-#2nd scenario
-parser.add_argument('--lambda_ce', type=float, default=0.2, help='λ: weight for cross-entropy loss')
-parser.add_argument('--lambda_in', type=float, default=0.1, help='λ: weight for in-distribution margin loss')
-parser.add_argument('--lambda_out', type=float, default=0.2, help='λ: weight for out-of-distribution loss')
-parser.add_argument('--lambda_temp', type=float, default=0.5, help='λ: weight for temporal consistency loss')
 
 # parse argument
 args = parser.parse_args()
@@ -214,19 +203,6 @@ elif args.score in ['scone', 'woods']:
 state = {k: v for k, v in args._get_kwargs()}
 print(state)
 
-# Initialize temporal loss tracking keys
-state['temporal_losses'] = []
-state['atc_changes'] = []
-state['fpr_changes'] = []
-state['prev_atc_values'] = []
-state['prev_fpr_values'] = []
-
-# Add new state variables for city-wise temporal loss
-state['city_ac_averages'] = []  # Store average AC for each city
-state['city_fpr_averages'] = []  # Store average FPR for each city
-state['city_ac_values'] = []  # Store all AC values per city
-state['city_fpr_values'] = []  # Store all FPR values per city
-
 #save wandb hyperparameters
 # wandb.config = state
 
@@ -270,21 +246,20 @@ state['OOD_scores_Ptest'] = []
 state['in_dist_constraint'] = []
 state['train_loss_constraint'] = []
 
-state['atc_city_0'] = []
-state['atc_city_1'] = []
-state['atc_city_2'] = []
-state['atc_diff_01'] = []
-state['atc_per_epoch'] = []
-state['ce_loss_per_epoch'] = []
+
+#Average confidence tracking
+state['avg_confidence'] = []
+state['avg_cor_confidence'] = []
+
+state['city_avg_confidence'] = []
+state['city_avg_cor_confidence'] = []
+state['id_ac_changes'] = []
+state['cor_ac_changes'] = []
+state['temporal_losses'] = []
+
 device = torch.device("cuda" if torch.cuda.is_available() and args.ngpu > 0 else "cpu")
 print("Using device:", device)
 
-
-lambda_sum = args.lambda_ce + args.lambda_in + args.lambda_out
-lambda_ce = args.lambda_ce / lambda_sum
-lambda_in = args.lambda_in / lambda_sum
-lambda_out = args.lambda_out / lambda_sum
-lambda_temp = args.lambda_temp / lambda_sum
 
 def split_loader_into_cities(dataset, batch_size=128, num_workers=4, T=3, seed=42):
     rng = np.random.default_rng(seed)
@@ -363,8 +338,6 @@ elif args.dataset in ['cifar100']:
     num_classes = 100
 elif args.dataset in ['MNIST']:
     num_classes = 10  
-elif args.dataset in ['clear']:
-    num_classes = 11  
 
 # WRN architecture with 10 output classes (extra NN is added later for SSND methods)
 net = WideResNet(args.layers, num_classes, args.widen_factor, dropRate=args.droprate)
@@ -385,9 +358,8 @@ if args.load_pretrained == 'snapshots/pretrained':
     print('Restoring trained model...')
     for i in range(200, -1, -1):
 
-        # model_name = os.path.join(args.load_pretrained, args.dataset + '_' + args.model +
-        #                           '_pretrained_epoch_' + str(i) + '.pt')
-        model_name = "snapshots/pretrained/wrn_clear10_temporal (1).pt"
+        model_name = os.path.join(args.load_pretrained, args.dataset + '_' + args.model +
+                                  '_pretrained_epoch_' + str(i) + '.pt')
         #model_name = "snapshots/pretrained/cinic10_wrn_pretrained_epoch_299.pt"
         #model_name = os.path.join(args.load_pretrained, 'in_ratio_50_cifar100_wrn_pretrained_epoch_' + str(i) + '.pt')
         if os.path.isfile(model_name):
@@ -557,159 +529,78 @@ def compute_entropy_atc(model, dataloader, delta=1.5, device='cuda'):
     entropies = torch.cat(all_entropies)
     atc = (entropies < delta).float().mean().item()
     return atc
-
-def compute_atc_max_softmax(model, dataloader, delta=0.9, device='cuda'):
-    model.eval()
-    all_confidences = []
-    with torch.no_grad():
-        for x, _ in dataloader:
-            x = x.to(device)
-            logits = model(x)
-            probs = F.softmax(logits, dim=1)
-            max_conf = torch.max(probs, dim=1)[0]  # Take max prob per sample
-            all_confidences.append(max_conf)
-    confidences = torch.cat(all_confidences)
-    atc = (confidences >= delta).float().mean().item()
-    return atc
-
-prev_atc_maxsoft = None
-prev_fpr = None
-temporal_loss = 0
-
-def compute_average_confidence(model, dataloader, device='cuda'):
-    """
-    Calculate the Average Confidence (AC) score across a dataset.
     
-    Args:
-        model: The neural network model
-        dataloader: DataLoader containing the samples
-        device: Device to run computation on ('cuda' or 'cpu')
-        
-    Returns:
-        float: Average confidence score across all samples
-    """
-    model.eval()
-    all_confidences = []
-    
-    with torch.no_grad():
-        for data, _ in dataloader:
-            data = data.to(device)
-            logits = model(data)
-            probs = F.softmax(logits, dim=1)
-            max_conf = torch.max(probs, dim=1)[0]  # Take max probability per sample
-            all_confidences.append(max_conf)
-    
-    # Concatenate all confidences and compute mean
-    confidences = torch.cat(all_confidences)
-    ac = confidences.mean().item()
-    
-    return ac
-def compute_fnr(out_scores, in_scores, fpr_cutoff=.05):
-    '''
-    compute fnr at 05
-    '''
-
-    in_labels = np.zeros(len(in_scores))
-    out_labels = np.ones(len(out_scores))
-    y_true = np.concatenate([in_labels, out_labels])
-    y_score = np.concatenate([in_scores, out_scores])
-    fpr, fnr, thresholds = det_curve(y_true=y_true, y_score=y_score)
-
-    idx = np.argmin(np.abs(fpr - fpr_cutoff))
-
-    fpr_at_fpr_cutoff = fpr[idx]
-    fnr_at_fpr_cutoff = fnr[idx]
-
-    if fpr_at_fpr_cutoff > 0.1:
-        fnr_at_fpr_cutoff = 1.0
-
-    return fnr_at_fpr_cutoff
-    
-def compute_temporal_loss(state, current_epoch, train_loader_in, test_loader_out, device, current_city):
+def compute_temporal_loss(state, current_epoch, test_loader_in, test_loader_cor, device, current_city):
     """
     Compute temporal loss based on changes in average confidence and FPR metrics
     Compares current epoch against the average values from the previous city
     """
-    if not args.temporal_loss_enabled:
-        return torch.tensor(0.0, device=device, requires_grad=True)
     
     # Compute current metrics
-    current_ac = compute_average_confidence(net, train_loader_in, device=device)
-    print("triggered temporal loss (using average confidence)")
-    
-    # Compute current FPR if we have OOD scores
-    current_fpr = 0.0
-    if len(state['OOD_scores_Ptest']) > 0 and len(state['OOD_scores_P0_test']) > 0:
-        current_fpr = compute_fnr(
-            np.array(state['OOD_scores_Ptest'][-1]), 
-            np.array(state['OOD_scores_P0_test'][-1])
-        )
-    
-    # Store current values for this city
-    if len(state['city_ac_values']) <= current_city:
-        state['city_ac_values'].append([])
-        state['city_fpr_values'].append([])
-    
-    state['city_ac_values'][current_city].append(current_ac)
-    state['city_fpr_values'][current_city].append(current_fpr)
-    
-    print(f"Stored AC={current_ac:.3f}, FPR={current_fpr:.3f} for City {current_city}, Epoch {current_epoch}")
-    
+    current_id_ac = compute_average_confidence(net, test_loader_in, device=device)
+    current_cor_ac = compute_average_confidence(net, test_loader_cor, device=device)
+
     # Check if we have data from the previous city
-    if current_city > 0 and len(state['city_ac_averages']) > current_city - 1:
+    if current_city > 0:
         # Get average values from the previous city
-        prev_city_ac_avg = state['city_ac_averages'][current_city - 1]
-        prev_city_fpr_avg = state['city_fpr_averages'][current_city - 1]
-        
-        print(f"Comparing against City {current_city-1} averages: AC={prev_city_ac_avg:.3f}, FPR={prev_city_fpr_avg:.3f}")
-        
+        prev_city_ac_avg = state['city_avg_confidence'][-1]
+        prev_city_cor_ac_avg = state['city_avg_cor_confidence'][-1]
+
+        print(f"Comparing against City {current_city-1} averages: ID AC={prev_city_ac_avg:.3f}")
+        print(f"Comparing against City {current_city-1} averages: COR AC={prev_city_cor_ac_avg:.3f}")
         # Compute changes against previous city averages
-        ac_change = abs(current_ac - prev_city_ac_avg)
-        fpr_change = abs(current_fpr - prev_city_fpr_avg)
+        id_ac_change = abs(current_id_ac - prev_city_ac_avg)
+        cor_ac_change = abs(current_cor_ac - prev_city_cor_ac_avg)
+
+        temporal_delta_ac = 0.05
         
         # Apply temporal penalties
-        ac_penalty = max(0.0, ac_change - args.temporal_delta_atc)
-        fpr_penalty = max(0.0, fpr_change - args.temporal_delta_fpr)
-        
-        temporal_loss = args.temporal_lambda * (ac_penalty )#+ fpr_penalty)
+        id_ac_penalty = max(0.0, id_ac_change - temporal_delta_ac)
+        cor_ac_penalty = max(0.0, cor_ac_change - temporal_delta_ac)
+
+        temporal_lambda = 1
+        temporal_loss = temporal_lambda * (id_ac_penalty + cor_ac_penalty)
         
         # Ensure temporal_loss is a tensor
         if not torch.is_tensor(temporal_loss):
             temporal_loss = torch.tensor(temporal_loss, device=device, requires_grad=True)
         
         # Log metrics
-        state['atc_changes'].append(ac_change)
-        state['fpr_changes'].append(fpr_change)
+        state['id_ac_changes'].append(id_ac_change)
+        state['cor_ac_changes'].append(cor_ac_change)
         state['temporal_losses'].append(temporal_loss.item())
         
         wandb.log({
             'temporal_loss': temporal_loss.item(),
-            'ac_change': ac_change,
-            'fpr_change': fpr_change,
+            'id_ac_change': id_ac_change,
+            'cor_ac_change': cor_ac_change,
             'current_city': current_city,
             'epoch': current_epoch
         }, step=current_epoch)
         
         # Print temporal loss for this epoch
         print(f"[Epoch {current_epoch}, City {current_city}] Temporal loss: {temporal_loss.item()}")
-        print(f"  Current AC: {current_ac:.3f}, Prev City Avg AC: {prev_city_ac_avg:.3f}")
-        print(f"  Current FPR: {current_fpr:.3f}, Prev City Avg FPR: {prev_city_fpr_avg:.3f}")
+        print(f"  Current ID AC: {current_id_ac:.3f}, Prev City Avg ID AC: {prev_city_ac_avg:.3f}")
+        print(f"  Current COR AC: {current_cor_ac:.3f}, Prev City Avg COR AC: {prev_city_cor_ac_avg:.3f}")
         
         return temporal_loss
     else:
         # First city or no previous city data
         temporal_loss = torch.tensor(0.0, device=device, requires_grad=True)
         state['temporal_losses'].append(0.0)
-        state['atc_changes'].append(0.0)
-        state['fpr_changes'].append(0.0)
+        wandb.log({
+            'temporal_loss': 0.0,
+            'id_ac_change': 0.0,
+            'cor_ac_change': 0.0,
+            'current_city': current_city,
+            'epoch': current_epoch
+        }, step=current_epoch)
         
-        # Print temporal loss for this epoch
         print(f"[Epoch {current_epoch}, City {current_city}] Temporal loss: 0.0 (first city or no previous city data)")
         
         return temporal_loss
 
-
-def train(epoch, train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, train_loader_aux_out, t):
+def train(epoch, train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, train_loader_aux_out, t, test_loader_in, test_loader_cor=None):
         '''
         Train the model using the specified score
         '''
@@ -718,10 +609,9 @@ def train(epoch, train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, 
         global in_constraint_weight
         global ce_constraint_weight
 
-        # declare lam global
-        if args.score in ['woods_nn',  'woods', 'scone']:
-            global lam
-            global lam2
+        
+        global lam
+        global lam2
 
         # print the learning rate
         for param_group in optimizer.param_groups:
@@ -751,11 +641,13 @@ def train(epoch, train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, 
         out_losses = []
         out_losses_weighted = []
         losses = []
-        temporal_loss = compute_temporal_loss(state, epoch, train_loader_in, None, device, t)
+
+        temporal_loss = compute_temporal_loss(state, epoch, test_loader_in, test_loader_cor, device, t)
+    
         for in_set, aux_in_set, aux_in_cor_set, aux_out_set in loaders:    
             #create the mixed batch
             aux_set = mix_batches(aux_in_set, aux_in_cor_set, aux_out_set)
-            
+
             batch_num += 1
             data = torch.cat((in_set[0], aux_set), 0)
             target = in_set[1]
@@ -768,18 +660,11 @@ def train(epoch, train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, 
             x = net(data.to(device))
 
             # in-distribution classification accuracy
-            if args.score in ['woods_nn']:
-                x_classification = x[:len(in_set[0]), :num_classes]
-            elif args.score in ['energy', 'OE', 'energy_vos', 'woods', 'scone']:
-                x_classification = x[:len(in_set[0])]
+            
+            x_classification = x[:len(in_set[0])]
             pred = x_classification.data.max(1)[1]
             train_accuracies.append(accuracy_score(list(to_np(pred)), list(to_np(target))))
-             # === DEBUG PRINTS ===
-            if epoch == 0 and batch_num == 2:  # just once early on
-                print(f"[Epoch {epoch}, Batch {batch_num}]")
-                print("First 10 ground truth labels:", to_np(target[:10]))
-                print("First 10 predicted labels   :", to_np(pred[:10]))
-                print("Batch accuracy:", accuracy_score(to_np(pred), to_np(target)))
+
             optimizer.zero_grad()
             
             # cross-entropy loss
@@ -789,76 +674,9 @@ def train(epoch, train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, 
                 # Create a tensor with gradients enabled
                 loss_ce = torch.tensor(0.0, device=device, requires_grad=True)
             losses_ce.append(loss_ce.item())
-            
-            if args.score == 'woods_nn':
-                '''
-                This is the same as woods_nn but it now uses separate
-                weight for in distribution scores and classification scores.
 
-                it also updates the weights separately
-                '''
-
-                # penalty for the mixture/auxiliary dataset
-                out_x_ood_task = x[len(in_set[0]):, num_classes]
-                out_loss = torch.mean(F.relu(1 - out_x_ood_task))
-                out_loss_weighted = args.out_constraint_weight * out_loss
-
-                in_x_ood_task = x[:len(in_set[0]), num_classes]
-                f_term = torch.mean(F.relu(1 + in_x_ood_task)) - args.false_alarm_cutoff
-                if in_constraint_weight * f_term + lam >= 0:
-                    in_loss = f_term * lam + in_constraint_weight / 2 * torch.pow(f_term, 2)
-                else:
-                    in_loss = - torch.pow(lam, 2) * 0.5 / in_constraint_weight
-
-                loss_ce_constraint = loss_ce - args.ce_tol * full_train_loss
-                if ce_constraint_weight * loss_ce_constraint + lam2 >= 0:
-                    loss_ce = loss_ce_constraint * lam2 + ce_constraint_weight / 2 * torch.pow(loss_ce_constraint, 2)
-                else:
-                    loss_ce = - torch.pow(lam2, 2) * 0.5 / ce_constraint_weight
-
-                # Compute temporal loss
-                # temporal_loss = compute_temporal_loss(state, epoch, train_loader_in, None, device, t)
-                # # add the losses together
-                loss = loss_ce + out_loss_weighted + in_loss #+ temporal_loss
-
-                in_losses.append(in_loss.item())
-                out_losses.append(out_loss.item())
-                out_losses_weighted.append(out_loss.item())
-                losses.append(loss.item())
-
-            elif args.score == 'energy':
-
-                Ec_out = -torch.logsumexp(x[len(in_set[0]):], dim=1)
-                Ec_in = -torch.logsumexp(x[:len(in_set[0])], dim=1)
-                loss_energy = 0.1 * (torch.pow(F.relu(Ec_in - args.m_in), 2).mean() + torch.pow(F.relu(args.m_out - Ec_out),
-                                                                                            2).mean())
-                loss = loss_ce + loss_energy
-
-                # Compute temporal loss
-                # temporal_loss = compute_temporal_loss(state, epoch, train_loader_in, None, device, t)
-                # loss = loss_ce + loss_energy #+ temporal_loss
-
-                losses.append(loss.item())
-
-            elif args.score == 'energy_vos':
-
-                Ec_out = torch.logsumexp(x[len(in_set[0]):], dim=1)
-                Ec_in = torch.logsumexp(x[:len(in_set[0])], dim=1)
-                binary_labels = torch.ones(len(x)).to('cpu')
-                binary_labels[len(in_set[0]):] = 0
-                loss_energy = F.binary_cross_entropy_with_logits(logistic_regression(
-                    torch.cat([Ec_in, Ec_out], -1).unsqueeze(1)).squeeze(),
-                                                                 binary_labels)
-
-                loss = loss_ce + args.energy_vos_lambda * loss_energy
-
-                # Compute temporal loss
-                # temporal_loss = compute_temporal_loss(state, epoch, train_loader_in, None, device, t)
-                # loss = loss_ce + args.energy_vos_lambda * loss_energy #+ temporal_loss
-
-                losses.append(loss.item())
-
-            elif args.score == 'scone':
+           
+            if args.score == 'scone':
                 #apply the sigmoid loss
                 loss_energy_in =  torch.mean(torch.sigmoid(logistic_regression(
                     (torch.logsumexp(x[:len(in_set[0])], dim=1)).unsqueeze(1)).squeeze()))
@@ -871,28 +689,18 @@ def train(epoch, train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, 
                     in_loss = in_constraint_term * lam + in_constraint_weight / 2 * torch.pow(in_constraint_term, 2)
                 else:
                     in_loss = - torch.pow(lam, 2) * 0.5 / in_constraint_weight
-                
+    
+                #alm function for the cross entropy constraint
                 # loss_ce_constraint = loss_ce - args.ce_tol * full_train_loss
                 # if ce_constraint_weight * loss_ce_constraint + lam2 >= 0:
                 #     loss_ce = loss_ce_constraint * lam2 + ce_constraint_weight / 2 * torch.pow(loss_ce_constraint, 2)
                 # else:
                 #     loss_ce = - torch.pow(lam2, 2) * 0.5 / ce_constraint_weight
+    
+                loss = 0.20*loss_ce + 0.20*args.out_constraint_weight*loss_energy_out + 0.20*in_loss + 0.40*temporal_loss
+                #loss =loss_ce +args.out_constraint_weight*loss_energy_out +in_loss + temporal_loss
 
-                # Compute temporal loss
-                
-                #loss = args.out_constraint_weight*loss_energy_out + in_loss + loss_ce + temporal_loss # optional: 
-                loss = lambda_ce * loss_ce + lambda_in * in_loss + lambda_out * loss_energy_out + lambda_temp * temporal_loss
-
-            elif args.score == 'OE':
-
-                loss_oe = args.oe_lambda * -(x[len(in_set[0]):].mean(1) - torch.logsumexp(x[len(in_set[0]):], dim=1)).mean()
-                loss = loss_ce + loss_oe
-
-                # Compute temporal loss
-                # temporal_loss = compute_temporal_loss(state, epoch, train_loader_in, None, device, t)
-                # loss = loss_ce + loss_oe #+ temporal_loss
-
-                losses.append(loss.item())
+           
 
             loss.backward()
             optimizer.step()
@@ -911,71 +719,12 @@ def train(epoch, train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, 
             'in loss':in_loss_avg,
             'out loss':out_loss_avg,
             'out loss (weighted)':out_loss_weighted_avg,
-            f'loss':loss_avg,
+          #  f'loss':loss_avg,
             'train accuracy':train_acc_avg
         }, step=epoch)
 
         # store train accuracy
         state['train_accuracy'].append(train_acc_avg)
-        state['ce_loss_per_epoch'].append(loss_ce_avg)
-
-        # updates for alm methods
-        if args.score in ["woods_nn"]:
-            print("making updates for SSND alm methods...")
-
-            # compute terms for constraints
-            in_term, ce_loss = compute_constraint_terms(train_loader_in)
-
-            # update lam for in-distribution term
-            if args.score in ["woods_nn"]:
-                print("updating lam...")
-
-                in_term_constraint = in_term - args.false_alarm_cutoff
-                print("in_distribution constraint value {}".format(in_term_constraint))
-                state['in_dist_constraint'].append(in_term_constraint.item())
-
-                # wandb
-                wandb.log({
-                    "in_term_constraint": in_term_constraint.item(),
-                    'in_constraint_weight': in_constraint_weight,
-                    'epoch': epoch
-                }, step=epoch)
-
-                # update lambda
-                if in_term_constraint * in_constraint_weight + lam >= 0:
-                    lam += args.lr_lam * in_term_constraint
-                else:
-                    lam += -args.lr_lam * lam / in_constraint_weight
-
-            # update lam2
-            if args.score in ["woods_nn"]:
-                print("updating lam2...")
-
-                ce_constraint = ce_loss - args.ce_tol * full_train_loss
-                print("cross entropy constraint {}".format(ce_constraint))
-                state['train_loss_constraint'].append(ce_constraint.item())
-
-                # wandb
-                wandb.log({
-                    "ce_term_constraint": ce_constraint.item(),
-                    'ce_constraint_weight': ce_constraint_weight,
-                    'epoch': epoch
-                }, step=epoch)
-
-                # update lambda2
-                if ce_constraint * ce_constraint_weight + lam2 >= 0:
-                    lam2 += args.lr_lam * ce_constraint
-                else:
-                    lam2 += -args.lr_lam * lam2 / ce_constraint_weight
-
-            # update weight for alm_full_2
-            if args.score == 'woods_nn' and in_term_constraint > args.constraint_tol:
-                print('increasing in_constraint_weight weight....\n')
-                in_constraint_weight *= args.penalty_mult
-
-            if args.score == 'woods_nn' and ce_constraint > args.constraint_tol:
-                print('increasing ce_constraint_weight weight....\n')
-                ce_constraint_weight *= args.penalty_mult
 
         #alm update for energy_vos alm methods
         if args.score in ['scone', 'woods']:
@@ -1033,9 +782,6 @@ def train(epoch, train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, 
                 print('increasing ce_constraint_weight weight....\n')
                 ce_constraint_weight *= args.penalty_mult
 
-        # After all batches for the epoch are processed, compute and log temporal loss ONCE per epoch
-        temporal_loss = compute_temporal_loss(state, epoch, train_loader_in, None, device, t)
-
 
 def compute_constraint_terms(city_loader_in):
     '''
@@ -1073,7 +819,26 @@ def compute_constraint_terms(city_loader_in):
     return np.mean(np.array(in_terms)), np.mean(np.array(ce_losses))
 
 
+def compute_fnr(out_scores, in_scores, fpr_cutoff=.05):
+    '''
+    compute fnr at 05
+    '''
 
+    in_labels = np.zeros(len(in_scores))
+    out_labels = np.ones(len(out_scores))
+    y_true = np.concatenate([in_labels, out_labels])
+    y_score = np.concatenate([in_scores, out_scores])
+    fpr, fnr, thresholds = det_curve(y_true=y_true, y_score=y_score)
+
+    idx = np.argmin(np.abs(fpr - fpr_cutoff))
+
+    fpr_at_fpr_cutoff = fpr[idx]
+    fnr_at_fpr_cutoff = fnr[idx]
+
+    if fpr_at_fpr_cutoff > 0.1:
+        fnr_at_fpr_cutoff = 1.0
+
+    return fnr_at_fpr_cutoff
 
 
 def compute_auroc(out_scores, in_scores):
@@ -1084,7 +849,35 @@ def compute_auroc(out_scores, in_scores):
     auroc = roc_auc_score(y_true=y_true, y_score=y_score)
 
     return auroc
-
+    
+def compute_average_confidence(model, dataloader, device='cuda'):
+    """
+    Calculate the Average Confidence (AC) score across a dataset.
+    
+    Args:
+        model: The neural network model
+        dataloader: DataLoader containing the samples
+        device: Device to run computation on ('cuda' or 'cpu')
+        
+    Returns:
+        float: Average confidence score across all samples
+    """
+    model.eval()
+    all_confidences = []
+    
+    with torch.no_grad():
+        for data, _ in dataloader:
+            data = data.to(device)
+            logits = model(data)
+            probs = F.softmax(logits, dim=1)
+            max_conf = torch.max(probs, dim=1)[0]  # Take max probability per sample
+            all_confidences.append(max_conf)
+    
+    # Concatenate all confidences and compute mean
+    confidences = torch.cat(all_confidences)
+    ac = confidences.mean().item()
+    
+    return ac
 
 # test function
 def test(epoch,test_loader_in,
@@ -1102,17 +895,11 @@ def test(epoch,test_loader_in,
     #Calculate AC for regular test data
     test_ac = compute_average_confidence(net, test_loader_in)
     print(f"\nTest Average Confidence: {test_ac:.3f}")
-    
+    state['avg_confidence'].append(test_ac)
     # Calculate AC for corrupted test data
     test_ac_cor = compute_average_confidence(net, test_loader_cor)
     print(f"Test Average Confidence (Corrupted): {test_ac_cor:.3f}")
-
-    # Log AC scores to wandb
-    wandb.log({
-        "test_ac": test_ac,
-        "test_ac_cor": test_ac_cor,
-        'epoch': epoch
-    }, step=epoch)
+    state['avg_cor_confidence'].append(test_ac_cor)
 
     # in-distribution performance
     print("computing over test in-distribution data...\n")
@@ -1319,6 +1106,8 @@ def test(epoch,test_loader_in,
             "test_accuracy_cor":acc_cor,
             "val_wild_total": val_wild_total,
             "val_wild_class_as_in": val_wild_class_as_in,
+            'avg_confidence':test_ac,
+            "avg_cor_confidence": test_ac_cor,
             'epoch':epoch}, step=epoch)
 
     print("\n fpr95_test {}".format(state['fpr95_test']))
@@ -1423,46 +1212,11 @@ from torch.utils.data import Subset, DataLoader
 import numpy as np
 
 
-from load_any_dataset import load_cifar, load_Imagenette, load_cinic10, load_clear_timestep
+from load_any_dataset import load_cifar, load_Imagenette, load_cinic10
 # city_0_loaders =  make_datasets(in_dset='cifar10', aux_out_dset='lsun_c', test_out_dset='lsun_c', state ={'batch_size': 128, 'prefetch': 4, 'seed': 42}, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise')
-city_0_loaders = load_clear_timestep(timestep=0)
-city_1_loaders = load_clear_timestep(timestep=1)
-city_2_loaders = load_clear_timestep(timestep=2)
-
-T = 3  # number of city splits
-
-
-
-# def compute_temporal_loss_and_log(global_epoch, city_mixed_loader, state, prev_atc, prev_fpr):
-#     delta = 0.05
-#     gamma = 0.05
-#     lambda_temp = 1.0
-
-#     current_atc = compute_atc_max_softmax(net, city_mixed_loader, delta=0.9)
-
-#     if len(state['OOD_scores_Ptest']) > 0 and len(state['OOD_scores_P0_test']) > 0:
-#         current_fpr = compute_fnr(np.array(state['OOD_scores_Ptest'][-1]), np.array(state['OOD_scores_P0_test'][-1]))
-#     else:
-#         current_fpr = 0.0
-
-#     if prev_atc is not None and prev_fpr is not None:
-#         atc_diff = abs(current_atc - prev_atc)
-#         fpr_diff = abs(current_fpr - prev_fpr)
-#         temporal_penalty = max(0.0, atc_diff - delta) + max(0.0, fpr_diff - gamma)
-#         temporal_loss = lambda_temp * temporal_penalty
-#     else:
-#         atc_diff = 0.0
-#         fpr_diff = 0.0
-#         temporal_loss = 0.0
-
-#     wandb.log({
-#         "temporal_loss": temporal_loss,
-#         "atc_maxsoft_change": atc_diff,
-#         "fpr_change": fpr_diff,
-#         "epoch": global_epoch
-#     })
-
-#     return current_atc, current_fpr, temporal_loss
+city_0_loaders = load_cifar()
+city_1_loaders = load_Imagenette()  # CINIC
+city_2_loaders =load_cinic10()
 
 
 import time
@@ -1540,11 +1294,12 @@ for t in range(T):
         global_epoch = t * total_epochs_per_city + epoch
         print('epoch', global_epoch + 1, '/', total_epochs_per_city * T)
         state['epoch'] = global_epoch
+
         train(global_epoch,
               train_loader_in,
               train_loader_aux_in,
               train_loader_aux_in_cor,
-              train_loader_aux_out,t)
+              train_loader_aux_out,t, test_loader_in, test_loader_cor)
 
         test(global_epoch,test_loader_in,
          test_loader_cor,
@@ -1554,31 +1309,9 @@ for t in range(T):
        
 
         scheduler.step()
-        
-    # After completing all epochs for this city, compute and store city averages
-    if len(state['city_ac_values']) > t and len(state['city_ac_values'][t]) > 0:
-        city_ac_avg = np.mean(state['city_ac_values'][t])
-        city_fpr_avg = np.mean(state['city_fpr_values'][t])
-        
-        # Store the averages for this city
-        if len(state['city_ac_averages']) <= t:
-            state['city_ac_averages'].append(city_ac_avg)
-            state['city_fpr_averages'].append(city_fpr_avg)
-        else:
-            state['city_ac_averages'][t] = city_ac_avg
-            state['city_fpr_averages'][t] = city_fpr_avg
-            
-        print(f"\n=== City {t} Completed ===")
-        print(f"Average AC for City {t}: {city_ac_avg:.3f}")
-        print(f"Average FPR for City {t}: {city_fpr_avg:.3f}")
-        
-        # Log to wandb
-        wandb.log({
-            f'city_{t}_avg_ac': city_ac_avg,
-            f'city_{t}_avg_fpr': city_fpr_avg,
-            'current_city': t
-        }, step=global_epoch)
-        
+
+    state['city_avg_confidence'].append(np.mean(np.array(state['avg_confidence'][-total_epochs_per_city:])))
+    state['city_avg_cor_confidence'].append(np.mean(np.array(state['avg_cor_confidence'][-total_epochs_per_city:])))
 
 state['best_epoch_valid'] = epoch
 
@@ -1591,23 +1324,6 @@ state['val_wild_class_as_in_at_best'] = state['val_wild_class_as_in'][-1]
 
 print('best epoch = {}'.format(state['best_epoch_valid']))
 
-# Print temporal losses for inspection
-if 'temporal_losses' in state:
-    print('Temporal losses per epoch:')
-    print(state['temporal_losses'])
-
-# Print city-wise averages
-print('\n=== City-wise Averages ===')
-for i in range(len(state['city_ac_averages'])):
-    print(f"City {i}: AC={state['city_ac_averages'][i]:.3f}, FPR={state['city_fpr_averages'][i]:.3f}")
-
-# Log final city averages to wandb
-for i in range(len(state['city_ac_averages'])):
-    wandb.log({
-        f'final_city_{i}_avg_ac': state['city_ac_averages'][i],
-        f'final_city_{i}_avg_fpr': state['city_fpr_averages'][i]
-    })
-    
 wandb.log({"best_epoch_valid": state['best_epoch_valid'],
             "test_fpr95_at_best": state['test_fpr95_at_best'],
             "test_auroc_at_best": state['test_auroc_at_best'],
@@ -1620,36 +1336,7 @@ print("\n=== Comparing ATC across cities ===")
 
 delta = 1.5  # same delta threshold
 
-# # Recompute final ATC for each city
-# atc_city_0 = compute_entropy_atc(net, city_mixed_loader_0, delta)
-# atc_city_1 = compute_entropy_atc(net, city_mixed_loader_1, delta)
-# atc_city_2 = compute_entropy_atc(net, city_mixed_loader_2, delta)
 
-# print(f"ATC City 0: {atc_city_0:.3f}")
-# print(f"ATC City 1: {atc_city_1:.3f}")
-# print(f"ATC City 2: {atc_city_2:.3f}")
-
-# # Compute differences
-# atc_diff_01 = abs(atc_city_0 - atc_city_1)
-# atc_diff_12 = abs(atc_city_1 - atc_city_2)
-# atc_diff_02 = abs(atc_city_0 - atc_city_2)
-
-# print(f"ATC Diff (City 0 vs 1): {atc_diff_01:.3f}")
-# print(f"ATC Diff (City 1 vs 2): {atc_diff_12:.3f}")
-# print(f"ATC Diff (City 0 vs 2): {atc_diff_02:.3f}")
-
-# # Save ATC results into wandb or state
-# wandb.log({
-#     "final_atc_city_0": atc_city_0,
-#     "final_atc_city_1": atc_city_1,
-#     "final_atc_city_2": atc_city_2,
-#     "final_atc_diff_01": atc_diff_01,
-#     "final_atc_diff_12": atc_diff_12,
-#     "final_atc_diff_02": atc_diff_02,
-# })
-
-# save model checkpoint
-#args.checkpoints_dir = './checkpoints/save/'
 if args.checkpoints_dir != '':
     model_checkpoint_dir = os.path.join(args.checkpoints_dir,
                                         args.dataset,
@@ -1669,7 +1356,6 @@ results_dir = os.path.join(args.results_dir,
                             args.score)
 if not os.path.exists(results_dir):
     os.makedirs(results_dir, exist_ok=True)
-
 results_filename = '{}.pkl'.format(method_data_name)
 results_path = os.path.join(results_dir, results_filename)
 with open(results_path, 'wb') as f:
