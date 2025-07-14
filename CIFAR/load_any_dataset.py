@@ -7,6 +7,7 @@ import os
 import random
 import torch.nn.functional as F
 import time
+from torch.utils.data import ConcatDataset
 
 def apply_corruption(image, corruption_type, severity=1):
     """
@@ -106,19 +107,65 @@ def apply_corruption(image, corruption_type, severity=1):
     else:
         raise ValueError(f"Unknown corruption type: {corruption_type}")
 
+# class CorruptedDataset(Dataset):
+#     def __init__(self, dataset, corruption_type, severity=1):
+#         self.dataset = dataset
+#         self.corruption_type = corruption_type
+#         self.severity = severity
+        
+#     def __getitem__(self, index):
+#         image, label = self.dataset[index]
+#         corrupted_image = apply_corruption(image, self.corruption_type, self.severity)
+#         return corrupted_image, label
+        
+#     def __len__(self):
+#         return len(self.dataset)
+from torchvision.utils import make_grid
+import matplotlib.pyplot as plt
+
 class CorruptedDataset(Dataset):
-    def __init__(self, dataset, corruption_type, severity=1):
+    def __init__(self, dataset, corruption_type, severity=1, debug=False):
         self.dataset = dataset
         self.corruption_type = corruption_type
         self.severity = severity
+        self.debug = debug  # NEW FLAG TO CONTROL DEBUGGING
         
     def __getitem__(self, index):
         image, label = self.dataset[index]
         corrupted_image = apply_corruption(image, self.corruption_type, self.severity)
+
+        # 🔍 Debug visualization (ONLY for first few samples)
+        if self.debug and index < 5:
+            print(f"[DEBUG] Showing original vs. corrupted for sample index {index}")
+            self.visualize(image, corrupted_image)
+        
         return corrupted_image, label
         
     def __len__(self):
         return len(self.dataset)
+
+    def denormalize(self, tensor, mean, std):
+        mean = torch.tensor(mean).view(3, 1, 1)
+        std = torch.tensor(std).view(3, 1, 1)
+        return tensor * std + mean
+
+    def visualize(self, original, corrupted):
+        mean = [125.3/255, 123.0/255, 113.9/255]
+        std = [63.0/255, 62.1/255, 66.7/255]
+    
+        original = self.denormalize(original, mean, std)
+        corrupted = self.denormalize(corrupted, mean, std)
+    
+        fig, axs = plt.subplots(1, 2, figsize=(6, 3))
+        axs[0].imshow(original.permute(1, 2, 0).numpy())
+        axs[0].set_title("Original")
+        axs[1].imshow(corrupted.permute(1, 2, 0).numpy())
+        axs[1].set_title("Corrupted")
+        for ax in axs:
+            ax.axis('off')
+        plt.tight_layout()
+        plt.show()
+
 
 def load_cifar(dataset='cifar10', batch_size=128, num_workers=4, alpha=0.5, pi_1=0.5, pi_2=0.1, cortype='gaussian_noise', seed=42):
     """
@@ -672,6 +719,140 @@ def load_cinic10(dataset='cinic10', batch_size=128, num_workers=4, alpha=0.5, pi
         pin_memory=True,
         drop_last=True
     )
+
     return (train_loader_in, train_loader_aux_in, train_loader_aux_in_cor, train_loader_aux_out,
             test_loader_in, test_loader_cor, test_loader_out, valid_loader_in, valid_loader_aux) 
+
+
+
+##CLear dataset
+def load_clear_timestep(timestep=0, batch_size=128, num_workers=4, alpha=0.3, cortype='frost', seed=42, pi_1=0.5, pi_2=0.1, corruption_debug=False):
+    import os
+    rng = np.random.RandomState(seed)
+    print(f'Building CLEAR-10 dataset for timestep {timestep}...')
+
+    mean = [x / 255 for x in [125.3, 123.0, 113.9]]
+    std = [x / 255 for x in [63.0, 62.1, 66.7]]
+    transform = trn.Compose([
+        trn.Resize((32, 32)),
+        trn.ToTensor(),
+        trn.Normalize(mean, std)
+    ])
+
+    train_root = f'../../../Clear_new/clear10/train/labeled_images/{timestep}'
+    test_root = f'../../../Clear_new/clear10/train/labeled_images/{timestep}'
+
+    train_data_in_orig = dset.ImageFolder(root=train_root, transform=transform)
+    test_in_data = dset.ImageFolder(root=test_root, transform=transform)
+
+    print(f"[DEBUG] Loaded {len(train_data_in_orig)} training samples from: {train_root}")
+    print(f"[DEBUG] Loaded {len(test_in_data)} test samples from: {test_root}")
+    print(f"[DEBUG] Classes found in training data: {train_data_in_orig.classes}")
+    print(f"[DEBUG] Class-to-index mapping: {train_data_in_orig.class_to_idx}")
+
+    if len(train_data_in_orig) == 0:
+        raise ValueError(f"No training data found at {train_root}")
+    if len(test_in_data) == 0:
+        raise ValueError(f"No test data found at {test_root}")
+
+    # Split training data
+    idx = np.arange(len(train_data_in_orig))
+    rng.shuffle(idx)
+    train_len_in = int(alpha * len(train_data_in_orig))
+    train_idx = idx[:train_len_in]
+    aux_idx = idx[int(0.5 * len(train_data_in_orig)):]
+    train_in_data = Subset(train_data_in_orig, train_idx)
+    aux_in_data = Subset(train_data_in_orig, aux_idx)
+
+    print(f"[DEBUG] Train set size: {len(train_in_data)}")
+    print(f"[DEBUG] Aux set size: {len(aux_in_data)}")
+
+    if len(train_in_data) == 0 or len(aux_in_data) == 0:
+        raise ValueError("Train or aux subset is empty. Adjust `alpha` or dataset size.")
+
+    train_in_cor_data = CorruptedDataset(train_in_data, cortype)
+    aux_in_cor_data = CorruptedDataset(aux_in_data, cortype)
+    test_data_cor = CorruptedDataset(test_in_data, cortype)
+
+    # Load OOD data (e.g., LSUN-C)
+    out_data = dset.ImageFolder(root='../data/LSUN/', transform=transform)
+    if len(out_data) == 0:
+        raise ValueError("No OOD data found at ../data/LSUN/")
+
+    idx_out = np.arange(len(out_data))
+    rng.shuffle(idx_out)
+    train_len_out = int(0.7 * len(out_data))
+    aux_out_data = Subset(out_data, idx_out[:train_len_out])
+    test_out_data = Subset(out_data, idx_out[train_len_out:])
+
+    # Validation split from aux_in
+    idx_in = np.arange(len(aux_in_data))
+    rng.shuffle(idx_in)
+    valid_in_size = int(0.1 * len(aux_in_data))
+    aux_in_valid_size = int(0.3 * len(aux_in_data))
+
+    if aux_in_valid_size + valid_in_size >= len(aux_in_data):
+        raise ValueError("Not enough aux_in_data to create validation splits.")
+
+    train_aux_in_idx = idx_in[aux_in_valid_size + valid_in_size:]
+    valid_in_idx = idx_in[aux_in_valid_size:aux_in_valid_size + valid_in_size]
+    train_aux_in_data_final = Subset(aux_in_data, train_aux_in_idx)
+    valid_in_data = Subset(aux_in_data, valid_in_idx)
+    valid_cor_data = CorruptedDataset(valid_in_data, cortype)
+
+    # Validation split from aux_out
+    idx_out = np.arange(len(aux_out_data))
+    rng.shuffle(idx_out)
+    aux_out_valid_size = int(0.3 * len(aux_out_data))
+
+    if aux_out_valid_size >= len(aux_out_data):
+        raise ValueError("Not enough aux_out_data to create validation split.")
+
+    train_aux_out_idx = idx_out[aux_out_valid_size:]
+    valid_out_idx = idx_out[:aux_out_valid_size]
+    train_aux_out_data_final = Subset(aux_out_data, train_aux_out_idx)
+    valid_out_data = Subset(aux_out_data, valid_out_idx)
+
+    valid_aux_data = ConcatDataset([valid_in_data, valid_cor_data, valid_out_data])
+
+    # Final sanity check
+    # print(f"[DEBUG] Final train/valid sizes - train_in: {len(train_in_data)}, train_aux_in: {len(train_aux_in_data_final)}, train_aux_out: {len(train_aux_out_data_final)}")
+    # print(f"[DEBUG] Validation in: {len(valid_in_data)}, cor: {len(valid_cor_data)}, out: {len(valid_out_data)}")
+
+    # debug_dataset = CorruptedDataset(Subset(train_in_data, range(10)), corruption_type=cortype, severity=3, debug=False)
+
+    # debug_loader = DataLoader(debug_dataset, batch_size=1, shuffle=False)
     
+    # for i, (img, label) in enumerate(debug_loader):
+    #     print(f"[DEBUG] Visualizing corrupted sample {i}")
+    #     if i >= 5:
+    #         break
+    
+
+    # Combine clean + corrupted in-distribution training samples
+    train_in_combined = ConcatDataset([train_in_data, train_in_cor_data])
+    
+    # Use the combined dataset in train_loader_in
+    train_loader_in = DataLoader(
+        train_in_combined,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=True
+    )
+
+
+    # Dataloaders
+    return (
+        train_loader_in,
+        # DataLoader(train_loader_in, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True),
+        DataLoader(train_aux_in_data_final, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True, drop_last=True),
+        DataLoader(train_in_cor_data, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True, drop_last=True),
+        DataLoader(train_aux_out_data_final, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True, drop_last=True),
+        DataLoader(test_in_data, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=True),
+        DataLoader(test_data_cor, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=True),
+        DataLoader(test_out_data, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=True),
+        DataLoader(valid_in_data, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=False),
+        DataLoader(valid_aux_data, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True, drop_last=False)
+    )
